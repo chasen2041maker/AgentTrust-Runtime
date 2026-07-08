@@ -1,16 +1,16 @@
 # AgentTrust Runtime
 
-AgentTrust Runtime is a local-first Python runtime design for governed agent tool execution.
+AgentTrust Runtime 是一个 local-first 的 Python runtime 设计，用来治理 Agent 工具调用。
 
-The goal is a small, deterministic, testable implementation of one core control path: turn every agent tool request into an auditable `ToolIntent`, enforce permission and path sandbox rules before execution, record replayable traces, and verify final structured claims with GroundGuard.
+项目目标不是做一个大而全的平台，而是实现一条小、确定、可测试的核心控制链路：把每一次 Agent 工具请求转换成可审计的 `ToolIntent`，在执行前经过权限判断和路径沙箱，记录可复盘的 trace，并用 GroundGuard 校验最终回答里的结构化事实是否有证据支持。
 
-## Current Status
+## 当前状态
 
-This repository currently contains the merged final implementation plan. Runtime implementation is the next step.
+当前仓库已经包含合并后的最终实施方案。下一步是开始 runtime 实现。
 
-See the [final implementation plan](AgentTrust-Runtime-%E6%9C%80%E7%BB%88%E5%AE%9E%E6%96%BD%E6%96%B9%E6%A1%88.md) for the full MVP scope and roadmap.
+完整 MVP 范围和 Roadmap 见：[最终实施方案](AgentTrust-Runtime-%E6%9C%80%E7%BB%88%E5%AE%9E%E6%96%BD%E6%96%B9%E6%A1%88.md)。
 
-## Core Runtime Path
+## 核心链路
 
 ```text
 Input Source
@@ -25,29 +25,29 @@ Input Source
   -> Replay / Report
 ```
 
-Fixtures and the minimal live adapter must use the same Gateway, Permission Engine, Sandbox, Trace Recorder, and FactGate path. Fixtures are only an input source, not a separate demo script.
+fixture 和极简 live adapter 必须走同一套 Gateway、Permission Engine、Sandbox、Trace Recorder 和 FactGate。fixture 只是输入源，不是绕过 runtime 的独立 demo 脚本。
 
-## MVP Scope
+## MVP 范围
 
-The MVP is intentionally narrow:
+MVP 范围刻意收窄，只做核心链路：
 
-- ToolIntent and ToolResult schemas
+- ToolIntent 和 ToolResult schema
 - Tool Gateway
-- Permission Engine with `allow`, `ask`, and `deny`
+- 支持 `allow`、`ask`、`deny` 的 Permission Engine
 - Path Sandbox
-- Built-in tools: `read_file`, `write_file`, `shell`, `git_diff`
-- Append-only `trace.jsonl`
-- Deterministic fixtures
+- 内置工具：`read_file`、`write_file`、`shell`、`git_diff`
+- append-only `trace.jsonl`
+- deterministic fixtures
 - GroundGuard adapter
-- Replay and report generation
-- Minimal live adapter: `run-live fake_tool_request`
-- README, threat model, related work, tests, and CI
+- replay 和 report 生成
+- 极简 live adapter：`run-live fake_tool_request`
+- README、Threat Model、Related Work、测试和 CI
 
-The MVP is not a full enterprise governance platform, a full MCP scanner, a coding assistant, a SaaS product, or a replacement for existing agent observability and governance tools.
+MVP 不做完整企业治理平台，不做完整 MCP scanner，不做 coding assistant，不做 SaaS，也不试图替代已有的 Agent observability / governance 工具。
 
-## Target CLI
+## 目标 CLI
 
-These are the planned MVP commands:
+计划中的 MVP 命令如下：
 
 ```bash
 agenttrust init
@@ -70,47 +70,47 @@ agenttrust policy validate .agenttrust/policy.yaml
 
 ## Demo Fixtures
 
-The MVP demos are designed to be deterministic and testable:
+MVP demo 必须确定、可复现、可测试：
 
-- `blocked_secret`: agent requests `.env`; runtime denies access.
-- `ask_noninteractive`: write request becomes `ask`, then `deny` in noninteractive mode.
-- `verified_answer`: final answer is supported by recorded facts.
-- `contradicted_answer`: final answer contradicts recorded facts.
-- `unverified_answer`: final answer omits required evidence.
+- `blocked_secret`：Agent 请求读取 `.env`，runtime 拒绝访问。
+- `ask_noninteractive`：写文件请求命中 `ask`，在 noninteractive 模式下转成 `deny`。
+- `verified_answer`：最终回答被已记录事实支持。
+- `contradicted_answer`：最终回答和已记录事实矛盾。
+- `unverified_answer`：最终回答缺少 required fact 的证据支持。
 
-## Why GroundGuard
+## 为什么接 GroundGuard
 
-AgentTrust Runtime does not try to solve general hallucination detection. It verifies structured fact coverage for facts explicitly recorded from tool outputs, especially numeric claims, tool metadata, and run artifacts.
+AgentTrust Runtime 不尝试解决通用 hallucination detection。它只校验工具输出中显式记录的结构化事实，尤其是数字声明、工具元数据和 run artifacts。
 
-The MVP will reuse GroundGuard for fact recording, coverage checks, and reporting. AgentTrust only adds the runtime-side adapter that maps tool results and fixture outputs into structured facts.
+MVP 会复用 GroundGuard 的 fact recording、coverage check 和 report 能力。AgentTrust 只补 runtime 侧 adapter，把 ToolResult 和 fixture output 映射成 GroundGuard 能理解的结构化事实。
 
 ## Roadmap
 
-The following ideas are deliberately outside the MVP:
+以下能力刻意不进入 MVP：
 
-- MCP Lite: inspect local MCP config and wrap known MCP tool calls as ToolIntent.
-- Skill Lite: bind local `SKILL.md` instructions, tool scope, required facts, and output contracts to a run.
-- Recovery Lite: back up files before `write_file` and restore changes by run id.
-- Tool Registry Lite: list and inspect tool schemas, scopes, and default effects.
-- Hook Lite: add a constrained `pre_tool` extension point that can only tighten decisions.
-- Memory Lite and Context Lite: explicit local project memory, run summaries, deterministic context packs, and budget trimming.
+- MCP Lite：inspect 本地 MCP config，并把已知 MCP tool call 包装成 ToolIntent。
+- Skill Lite：把本地 `SKILL.md` instruction、tool scope、required facts 和 output contract 绑定到一次 run。
+- Recovery Lite：在 `write_file` 前备份文件，并支持按 run id 恢复。
+- Tool Registry Lite：列出和 inspect 工具 schema、scope 和 default effect。
+- Hook Lite：增加受限的 `pre_tool` 扩展点，只允许收紧决策。
+- Memory Lite / Context Lite：显式本地项目记忆、run summary、确定性 context pack 和 budget trimming。
 
-These features must remain subordinate to the core runtime path. If a feature does not strengthen permission, sandbox, trace, FactGate, or report, it should stay out of the MVP.
+这些能力必须服从核心 runtime 链路。如果一个功能不能强化 permission、sandbox、trace、FactGate 或 report，就不进入 MVP。
 
 ## Related Work and Scope
 
-AgentTrust Runtime is a small local-first implementation for learning and portfolio review. It is not a replacement for Microsoft Agent Governance Toolkit, Invariant MCP-Scan, Cisco MCP Scanner, Snyk Agent Scan, AgentOps, Braintrust, or Phoenix. Those projects cover production governance, MCP/skills scanning, or observability at broader scope.
+AgentTrust Runtime 是一个用于学习和作品集展示的小型 local-first 实现。它不是 Microsoft Agent Governance Toolkit、Invariant MCP-Scan、Cisco MCP Scanner、Snyk Agent Scan、AgentOps、Braintrust 或 Phoenix 的替代品。这些项目覆盖更完整的生产治理、MCP/skills scanning 或 observability 场景。
 
-This project focuses on one narrow path: policy-gated local tool execution, replayable traces, and GroundGuard-backed fact verification in the same run artifact.
+本项目只聚焦一条窄路径：policy-gated local tool execution、replayable traces，以及同一个 run artifact 中由 GroundGuard 支撑的 fact verification。
 
-## Next Step
+## 下一步
 
-Start Week 1 implementation:
+进入 Week 1 实现：
 
-- create the Python package skeleton
-- implement `agenttrust init`
-- implement `agenttrust run-fixture`
-- define ToolIntent and ToolResult
-- write append-only trace events
-- add `read_file` and `git_diff`
-- make sure fixtures go through the Gateway
+- 创建 Python package skeleton
+- 实现 `agenttrust init`
+- 实现 `agenttrust run-fixture`
+- 定义 ToolIntent 和 ToolResult
+- 写入 append-only trace events
+- 增加 `read_file` 和 `git_diff`
+- 确保 fixture 必须通过 Gateway
