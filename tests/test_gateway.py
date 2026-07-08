@@ -27,7 +27,7 @@ def test_gateway_returns_error_for_unknown_tool(tmp_path: Path) -> None:
     intent = ToolIntent(
         run_id="run_test",
         tool_call_id="call_001",
-        tool_name="write_file",
+        tool_name="unknown_tool",
         arguments={"path": "x.txt", "content": "hello"},
         source="test",
     )
@@ -35,5 +35,5 @@ def test_gateway_returns_error_for_unknown_tool(tmp_path: Path) -> None:
     result = ToolGateway().execute(intent, tmp_path)
 
     assert result.status == "error"
-    assert result.error == "unknown tool: write_file"
-    assert result.metadata["available_tools"] == ["git_diff", "read_file"]
+    assert result.error == "unknown tool: unknown_tool"
+    assert result.metadata["available_tools"] == ["git_diff", "read_file", "shell", "write_file"]

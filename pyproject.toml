@@ -12,7 +12,9 @@ license = { text = "MIT" }
 authors = [
   { name = "chasen2041maker" }
 ]
-dependencies = []
+dependencies = [
+  "PyYAML>=6.0"
+]
 
 [project.optional-dependencies]
 test = [

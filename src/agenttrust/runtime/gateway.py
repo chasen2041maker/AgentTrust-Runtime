@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agenttrust.schemas import ToolIntent, ToolResult
-from agenttrust.tools import git_diff, read_file
+from agenttrust.tools import git_diff, read_file, shell, write_file
 
 ToolHandler = Callable[[ToolIntent, Path], ToolResult]
 
@@ -17,6 +17,8 @@ class ToolGateway:
     def __init__(self) -> None:
         self._tools: dict[str, ToolHandler] = {
             "read_file": read_file,
+            "write_file": write_file,
+            "shell": shell,
             "git_diff": git_diff,
         }
 
