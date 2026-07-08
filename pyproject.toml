@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agenttrust-runtime"
+version = "0.1.0"
+description = "Local-first runtime for governed agent tool execution."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "chasen2041maker" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0"
+]
+
+[project.scripts]
+agenttrust = "agenttrust.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agenttrust"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
