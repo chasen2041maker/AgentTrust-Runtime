@@ -8,11 +8,23 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from agenttrust.context_lite import build_context_pack, export_context_to_run
 from agenttrust.groundguard_adapter import map_tool_result, verify_answer, write_coverage_report, write_facts
-from agenttrust.permissions import PathSandbox, PermissionEngine, finalize_permission, load_policy
+from agenttrust.memory_lite import add_memory, append_run_summary, list_memory
+from agenttrust.permissions import (
+    HookRule,
+    PathSandbox,
+    PermissionEngine,
+    evaluate_pre_tool_hooks,
+    finalize_permission,
+    load_policy,
+    request_interactive_approval,
+)
+from agenttrust.runtime.recovery import create_backup_for_write
 from agenttrust.runtime.gateway import ToolGateway
 from agenttrust.runtime.trace import TraceRecorder
 from agenttrust.schemas import ToolIntent
+from agenttrust.skills_lite import load_skill
 
 
 @dataclass(frozen=True)
@@ -21,6 +33,12 @@ class Fixture:
     tool_intents: tuple[dict[str, object], ...]
     final_answer: str | None = None
     required_fact_keys: tuple[str, ...] = ()
+    hooks: tuple[HookRule, ...] = ()
+    skill: str | None = None
+    memory_project: tuple[str, ...] = ()
+    memory_decisions: tuple[str, ...] = ()
+    context_skill: str | None = None
+    context_budget: int | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +109,102 @@ BUILTIN_FIXTURES: dict[str, Fixture] = {
         final_answer="Revenue was $9.99 billion.",
         required_fact_keys=("revenue",),
     ),
+    "mcp_tool_denied": Fixture(
+        name="mcp_tool_denied",
+        tool_intents=(
+            {
+                "tool_name": "mcp_tool",
+                "arguments": {"server": "local-files", "tool": "read_project_file", "input": {"path": "README.md"}},
+            },
+        ),
+    ),
+    "mcp_tool_approved": Fixture(
+        name="mcp_tool_approved",
+        tool_intents=(
+            {
+                "tool_name": "mcp_tool",
+                "arguments": {"server": "local-files", "tool": "read_project_file", "input": {"path": "README.md"}},
+            },
+        ),
+        final_answer="The mcp_tool_calls value is 1 [fact:mcp_tool_calls].",
+        required_fact_keys=("mcp_tool_calls",),
+    ),
+    "skill_code_review": Fixture(
+        name="skill_code_review",
+        tool_intents=(
+            {
+                "tool_name": "git_diff",
+                "source": "skill_lite",
+                "arguments": {
+                    "simulated_diff": (
+                        "diff --git a/README.md b/README.md\n"
+                        "--- a/README.md\n"
+                        "+++ b/README.md\n"
+                        "+verified roadmap coverage\n"
+                    ),
+                },
+            },
+        ),
+        final_answer="The git_diff_files_changed value is 1 [fact:git_diff_files_changed].",
+        required_fact_keys=("git_diff_files_changed",),
+        skill="code-review",
+    ),
+    "skill_blocked_tool": Fixture(
+        name="skill_blocked_tool",
+        tool_intents=(
+            {
+                "tool_name": "shell",
+                "source": "skill_lite",
+                "arguments": {"command": "echo should not run"},
+            },
+        ),
+        skill="code-review",
+    ),
+    "write_and_restore": Fixture(
+        name="write_and_restore",
+        tool_intents=(
+            {
+                "tool_name": "write_file",
+                "arguments": {"path": "tmp/demo.txt", "content": "changed by agent"},
+            },
+        ),
+    ),
+    "blocked_by_hook": Fixture(
+        name="blocked_by_hook",
+        tool_intents=(
+            {
+                "tool_name": "write_file",
+                "arguments": {"path": "src/app.py", "content": "changed"},
+            },
+        ),
+        hooks=(
+            HookRule(
+                id="block-src-write",
+                tool="write_file",
+                path_glob="src/**",
+                action="deny",
+                reason="src writes blocked by hook",
+            ),
+        ),
+    ),
+    "memory_context_pack": Fixture(
+        name="memory_context_pack",
+        tool_intents=(
+            {
+                "tool_name": "skill_context",
+                "arguments": {
+                    "skill": "code-review",
+                    "allowed_tools": ["read_file", "git_diff"],
+                    "blocked_tools": ["shell", "write_file"],
+                    "required_fact_keys": ["git_diff_files_changed"],
+                },
+            },
+        ),
+        memory_project=("GroundGuard verifies final numeric claims.",),
+        memory_decisions=("Noninteractive ask is denied by default.",),
+        context_skill="code-review",
+        context_budget=1200,
+    ),
 }
 
 
@@ -116,6 +230,7 @@ def run_fixture(
     project_root: Path,
     runtime_mode: str = "interactive",
     gateway: ToolGateway | None = None,
+    skill_override: str | None = None,
 ) -> RunResult:
     fixture = get_fixture(name)
     run_id = create_run_id()
@@ -129,6 +244,11 @@ def run_fixture(
     decisions_path = run_dir / "decisions.json"
     decisions: list[dict[str, object]] = []
     all_facts = []
+    permission_counts = {"allow": 0, "ask": 0, "deny": 0}
+    tool_result_count = 0
+    coverage_status: str | None = None
+    skill_name = skill_override or fixture.skill
+    skill_info = load_skill(project_root, skill_name) if skill_name else None
 
     recorder.append(
         "run_started",
@@ -138,31 +258,128 @@ def run_fixture(
         runtime_mode=runtime_mode,
     )
 
+    if skill_info is not None:
+        recorder.append(
+            "skill_loaded",
+            run_id=run_id,
+            skill_name=skill_info.name,
+            allowed_tools=skill_info.policy.get("allowed_tools", []),
+            blocked_tools=skill_info.policy.get("blocked_tools", []),
+            required_fact_keys=skill_info.policy.get("required_fact_keys", []),
+            output_contract=skill_info.policy.get("output_contract", {}),
+        )
+
+    for text in fixture.memory_project:
+        path = add_memory(project_root, "project", text)
+        recorder.append("memory_written", run_id=run_id, scope="project", path=str(path), text=text)
+    for text in fixture.memory_decisions:
+        path = add_memory(project_root, "decision", text)
+        recorder.append("memory_written", run_id=run_id, scope="decision", path=str(path), text=text)
+    if fixture.memory_project or fixture.memory_decisions or fixture.context_skill:
+        memory = list_memory(project_root)
+        recorder.append(
+            "memory_loaded",
+            run_id=run_id,
+            project_memory_present=bool(memory.get("project")),
+            decision_count=len(memory.get("decisions", [])),
+            run_summary_count=len(memory.get("run_summaries", [])),
+        )
+    if fixture.context_skill:
+        pack_path, manifest_path = build_context_pack(
+            project_root,
+            skill=fixture.context_skill,
+            budget=fixture.context_budget or 4000,
+        )
+        run_pack_path, run_manifest_path = export_context_to_run(project_root, run_id)
+        recorder.append(
+            "context_pack_built",
+            run_id=run_id,
+            skill=fixture.context_skill,
+            context_pack=str(pack_path),
+            context_manifest=str(manifest_path),
+            run_context_pack=str(run_pack_path),
+            run_context_manifest=str(run_manifest_path),
+            budget=fixture.context_budget or 4000,
+        )
+
     for index, intent_spec in enumerate(fixture.tool_intents, start=1):
         tool_name = intent_spec["tool_name"]
         arguments = intent_spec.get("arguments", {})
+        source = intent_spec.get("source", "fixture")
         if not isinstance(tool_name, str):
             raise TypeError("fixture tool_name must be a string")
         if not isinstance(arguments, dict):
             raise TypeError("fixture arguments must be a dictionary")
+        if not isinstance(source, str):
+            raise TypeError("fixture source must be a string")
 
         intent = ToolIntent(
             run_id=run_id,
             tool_call_id=f"call_{index:03d}",
             tool_name=tool_name,
             arguments=arguments,
-            source="fixture",
+            source=source,
             runtime_mode=runtime_mode,
         )
         recorder.append("tool_intent", **intent.to_dict())
 
+        if skill_info is not None:
+            allowed_tools = set(str(tool) for tool in skill_info.policy.get("allowed_tools", []))
+            blocked_tools = set(str(tool) for tool in skill_info.policy.get("blocked_tools", []))
+            if intent.tool_name in blocked_tools or (allowed_tools and intent.tool_name not in allowed_tools):
+                skill_decision = {
+                    "run_id": run_id,
+                    "tool_call_id": intent.tool_call_id,
+                    "tool_name": intent.tool_name,
+                    "effect": "deny",
+                    "skill_name": skill_info.name,
+                    "reason": "tool blocked by skill policy",
+                }
+                decisions.append(skill_decision)
+                recorder.append("skill_decision", **skill_decision)
+                continue
+            skill_decision = {
+                "run_id": run_id,
+                "tool_call_id": intent.tool_call_id,
+                "tool_name": intent.tool_name,
+                "effect": "allow",
+                "skill_name": skill_info.name,
+                "reason": "tool allowed by skill policy",
+            }
+            decisions.append(skill_decision)
+            recorder.append("skill_decision", **skill_decision)
+
         permission_decision = permission_engine.decide(intent)
-        final_permission = finalize_permission(permission_decision, runtime_mode)
+        hook_decision = evaluate_pre_tool_hooks(intent, policy.hooks + fixture.hooks)
+        if hook_decision.hook_id is not None:
+            decisions.append(hook_decision.to_dict())
+            recorder.append("hook_decision", **hook_decision.to_dict())
+
+        approval_response = None
+        if permission_decision.effect == "ask" and runtime_mode == "interactive" and hook_decision.effect != "deny":
+            recorder.append(
+                "approval_request",
+                run_id=run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                reason=permission_decision.reason,
+            )
+            approval_response = request_interactive_approval(permission_decision)
+
+        final_permission = finalize_permission(permission_decision, runtime_mode, approval_response)
+        if hook_decision.effect == "deny" and final_permission.final_effect != "deny":
+            final_permission = type(final_permission)(
+                effect=final_permission.effect,
+                final_effect="deny",
+                reason=hook_decision.reason,
+                approval_required=final_permission.approval_required,
+            )
         permission_event = {
             **permission_decision.to_dict(),
             **final_permission.to_dict(),
             "runtime_mode": runtime_mode,
         }
+        permission_counts[final_permission.final_effect] = permission_counts.get(final_permission.final_effect, 0) + 1
         decisions.append(permission_event)
         recorder.append("permission_decision", **permission_event)
         if final_permission.final_effect != "allow":
@@ -174,7 +391,12 @@ def run_fixture(
             decisions.append(sandbox_decision.to_dict())
             continue
 
+        backup_record = create_backup_for_write(intent, project_root, run_dir)
+        if backup_record is not None:
+            recorder.append("backup_created", **backup_record.to_dict())
+
         result = gateway.execute(intent, project_root)
+        tool_result_count += 1
         recorder.append("tool_result", **result.to_dict())
         facts = map_tool_result(result)
         if facts:
@@ -193,9 +415,22 @@ def run_fixture(
         (run_dir / "final-answer.md").write_text(fixture.final_answer, encoding="utf-8")
         recorder.append("final_answer", run_id=run_id, answer=fixture.final_answer)
         coverage_report = verify_answer(fixture.final_answer, all_facts, list(fixture.required_fact_keys))
+        coverage_status = coverage_report.status
         write_coverage_report(run_dir / "groundguard-report.json", coverage_report)
         recorder.append("groundguard_check", run_id=run_id, **coverage_report.to_dict())
 
+    summary_path = append_run_summary(
+        project_root,
+        {
+            "run_id": run_id,
+            "fixture_name": fixture.name,
+            "tool_intent_count": len(fixture.tool_intents),
+            "tool_result_count": tool_result_count,
+            "permission_counts": permission_counts,
+            "groundguard_status": coverage_status,
+        },
+    )
+    recorder.append("memory_written", run_id=run_id, scope="run", path=str(summary_path))
     decisions_path.write_text(json.dumps(decisions, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     recorder.append("run_completed", run_id=run_id, status="completed")
     return RunResult(run_id=run_id, run_dir=run_dir, trace_path=recorder.trace_path)

@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from agenttrust.permissions.hooks import HookRule
 from agenttrust.schemas import ToolIntent
 
 
@@ -60,6 +61,7 @@ class Policy:
     project_root: str = "."
     mode: str = "default"
     rules: tuple[PolicyRule, ...] = field(default_factory=tuple)
+    hooks: tuple[HookRule, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Policy":
@@ -67,6 +69,10 @@ class Policy:
             project_root=str(raw.get("project_root", ".")),
             mode=str(raw.get("mode", "default")),
             rules=tuple(PolicyRule.from_dict(rule) for rule in raw.get("rules", ()) or ()),
+            hooks=tuple(
+                HookRule.from_dict(hook)
+                for hook in ((raw.get("hooks", {}) or {}).get("pre_tool", ()) or ())
+            ),
         )
 
 
@@ -101,6 +107,11 @@ rules:
       - "tests/**"
     effect: ask
     reason: "code changes require approval"
+
+  - id: ask-before-mcp-tool
+    tool: mcp_tool
+    effect: ask
+    reason: "MCP tool calls require approval"
 """
 
 

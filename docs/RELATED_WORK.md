@@ -2,17 +2,25 @@
 
 AgentTrust Runtime is a small local-first implementation for learning and portfolio review. It is not a replacement for Microsoft Agent Governance Toolkit, Invariant MCP-Scan, Cisco MCP Scanner, Snyk Agent Scan, AgentOps, Braintrust, or Phoenix.
 
-Those projects cover production governance, MCP/skills scanning, or observability at broader scope. This project focuses on one narrow path: policy-gated local tool execution, replayable traces, and GroundGuard-backed structured fact verification in the same run artifact.
+Those projects cover production governance, MCP/skills scanning, observability, or enterprise workflows at broader scope. This project focuses on one inspectable path: policy-gated local tool execution, replayable traces, recovery for local writes, controlled context assembly, and GroundGuard-backed structured fact verification in the same run artifact.
 
-## Deliberate Scope Boundary
+## Implemented Scope
 
-MVP focuses on:
+The repository now includes:
 
-- Permission before local tool execution
+- Permission checks before local tool execution
 - Path sandbox checks
 - Append-only trace
 - Deterministic fixtures
 - Structured fact mapping
-- Replayable reports
+- Replayable markdown and HTML reports
+- MCP Lite config inspection and wrapper calls
+- Skill Lite local loader and tool-scope enforcement
+- Recovery Lite for `write_file`
+- Tool Registry Lite
+- Hook Lite `pre_tool` denial rules
+- Memory Lite and Context Lite
 
-Roadmap work such as MCP Lite, Skill Lite, Recovery Lite, Tool Registry Lite, Hook Lite, Memory Lite, and Context Lite stays outside the MVP unless it strengthens the core runtime path.
+## Deliberate Boundary
+
+AgentTrust Runtime still does not attempt to be a full production platform. It does not implement a remote MCP proxy, skill marketplace, cloud policy service, full observability backend, TUI coding assistant, automatic long-term persona memory, or tamper-evident audit hash chain.

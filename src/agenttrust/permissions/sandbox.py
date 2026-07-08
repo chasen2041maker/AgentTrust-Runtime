@@ -93,7 +93,7 @@ class PathSandbox:
     def _is_secret_path(self, path: Path) -> bool:
         normalized_parts = {part.lower() for part in path.parts}
         return (
-            path.name == ".env"
+            path.name.lower() == ".env"
             or path.suffix.lower() == ".pem"
             or (".ssh" in normalized_parts)
         )

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from agenttrust.schemas import ToolIntent, ToolResult
-from agenttrust.tools import git_diff, read_file, shell, write_file
+from agenttrust.tools import git_diff, mcp_tool, read_file, shell, skill_context, write_file
 
 ToolHandler = Callable[[ToolIntent, Path], ToolResult]
 
@@ -20,6 +20,8 @@ class ToolGateway:
             "write_file": write_file,
             "shell": shell,
             "git_diff": git_diff,
+            "mcp_tool": mcp_tool,
+            "skill_context": skill_context,
         }
 
     @property

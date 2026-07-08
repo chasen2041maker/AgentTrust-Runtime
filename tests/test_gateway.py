@@ -36,4 +36,4 @@ def test_gateway_returns_error_for_unknown_tool(tmp_path: Path) -> None:
 
     assert result.status == "error"
     assert result.error == "unknown tool: unknown_tool"
-    assert result.metadata["available_tools"] == ["git_diff", "read_file", "shell", "write_file"]
+    assert result.metadata["available_tools"] == list(ToolGateway().tool_names)

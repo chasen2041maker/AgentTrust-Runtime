@@ -32,6 +32,22 @@ def _diff_stats(diff_text: str) -> dict[str, int]:
 
 
 def git_diff(intent: ToolIntent, project_root: Path) -> ToolResult:
+    simulated_diff = intent.arguments.get("simulated_diff")
+    if isinstance(simulated_diff, str):
+        return ToolResult(
+            run_id=intent.run_id,
+            tool_call_id=intent.tool_call_id,
+            tool_name=intent.tool_name,
+            status="ok",
+            output_preview=simulated_diff[:500],
+            output_digest=_digest_text(simulated_diff),
+            metadata={
+                "exit_code": 0,
+                **_diff_stats(simulated_diff),
+                "simulated": True,
+            },
+        )
+
     try:
         completed = subprocess.run(
             ["git", "diff", "--no-ext-diff", "--"],

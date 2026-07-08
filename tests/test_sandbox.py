@@ -41,6 +41,16 @@ def test_sandbox_denies_env_file(tmp_path: Path) -> None:
     assert decision.reason == "secret files are blocked"
 
 
+def test_sandbox_denies_secret_paths_case_insensitively(tmp_path: Path) -> None:
+    env_decision = PathSandbox(tmp_path).check(_intent(".ENV"))
+    pem_decision = PathSandbox(tmp_path).check(_intent("cert.PEM"))
+    ssh_decision = PathSandbox(tmp_path).check(_intent(".SSH/id_rsa"))
+
+    assert env_decision.effect == "deny"
+    assert pem_decision.effect == "deny"
+    assert ssh_decision.effect == "deny"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="symlink behavior requires elevated Windows privileges")
 def test_sandbox_denies_symlink_escape(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside-secret.txt"

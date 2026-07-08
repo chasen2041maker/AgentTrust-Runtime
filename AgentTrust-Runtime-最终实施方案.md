@@ -16,6 +16,8 @@ merged_from: AgentTrust-Runtime-MVP收缩执行方案.md
 > MVP 必须收缩到核心链路：`ToolIntent -> Tool Gateway -> Permission Engine -> Path Sandbox -> Trace -> GroundGuard FactGate -> Replay/Report`。
 >
 > Week 5/6 中的 MCP Lite、Skill Lite、Recovery Lite、Tool Registry Lite、Hook Lite、Memory Lite、Context Lite 统一降级为 Roadmap，不混入 MVP。MVP 最多只加一个增强点：`agenttrust run-live fake_tool_request` 形式的极简 live adapter。
+>
+> 实现状态（2026-07-08）：仓库已经完成 MVP 主链路，并继续完成 Roadmap Lite 展示层：MCP Lite、Skill Lite、Recovery Lite、Tool Registry Lite、Hook Lite、Memory Lite、Context Lite 均已接入 CLI、trace 和 pytest 覆盖。
 
 ## 1. 最终结论
 
