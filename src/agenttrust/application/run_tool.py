@@ -79,6 +79,7 @@ class RunToolUseCase:
         hooks: tuple[HookRule, ...] = (),
         facts_path: Path | None = None,
         on_tool_call_status: ToolStatusObserver | None = None,
+        defer_approval: bool = False,
     ) -> ToolRunOutcome:
         self._evidence.append("tool_intent", **intent.to_dict())
         permission_decision = self._policy_evaluator.decide(intent)
@@ -104,7 +105,15 @@ class RunToolUseCase:
             )
             approval_response = self._request_approval(permission_decision)
 
-        final_permission = self._finalize_permission(permission_decision, runtime_mode, approval_response)
+        if permission_decision.effect == "ask" and defer_approval and hook_decision.effect != "deny":
+            final_permission = FinalPermission(
+                effect=permission_decision.effect,
+                final_effect="ask",
+                reason="approval_pending",
+                approval_required=True,
+            )
+        else:
+            final_permission = self._finalize_permission(permission_decision, runtime_mode, approval_response)
         if hook_decision.effect == "deny" and final_permission.final_effect != "deny":
             final_permission = FinalPermission(
                 effect=final_permission.effect,
@@ -119,7 +128,7 @@ class RunToolUseCase:
         }
         self._evidence.append("permission_decision", **permission_event)
         if final_permission.final_effect != "allow":
-            if on_tool_call_status is not None:
+            if final_permission.final_effect != "ask" and on_tool_call_status is not None:
                 on_tool_call_status("policy_denied")
             return ToolRunOutcome(
                 intent=intent,

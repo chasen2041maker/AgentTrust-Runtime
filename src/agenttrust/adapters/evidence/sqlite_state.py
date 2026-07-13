@@ -128,12 +128,20 @@ class SQLiteStateProjection:
             ).fetchall()
         return [_row_to_dict(row) for row in rows]
 
-    def list_approvals(self, run_id: str) -> list[dict[str, object]]:
+    def list_approvals(self, run_id: str | None = None) -> list[dict[str, object]]:
         with self._connection() as connection:
-            rows = connection.execute(
-                "SELECT * FROM approvals WHERE run_id = ? ORDER BY requested_at", (run_id,)
-            ).fetchall()
+            if run_id is None:
+                rows = connection.execute("SELECT * FROM approvals ORDER BY requested_at").fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM approvals WHERE run_id = ? ORDER BY requested_at", (run_id,)
+                ).fetchall()
         return [_row_to_dict(row) for row in rows]
+
+    def get_approval(self, approval_id: str) -> dict[str, object] | None:
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM approvals WHERE approval_id = ?", (approval_id,)).fetchone()
+        return _row_to_dict(row)
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:

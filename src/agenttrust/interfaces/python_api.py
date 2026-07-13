@@ -10,6 +10,7 @@ from uuid import uuid4
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
 from agenttrust.adapters.evidence.projecting_recorder import ProjectingTraceRecorder
 from agenttrust.adapters.evidence.recovery import create_backup_for_write
+from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
 from agenttrust.adapters.policy.yaml_policy import load_policy, snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
@@ -149,6 +150,8 @@ class AgentTrustRuntime:
             run_dir=run_dir,
             runtime_mode=self.runtime_mode,
             hooks=policy.hooks,
+            approval_journal=JsonlApprovalJournal(run_dir),
+            defer_approvals=self.runtime_mode != "test",
         )
         evidence.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
         return AgentTrustSession(governed_session, evidence, self.runtime_mode)

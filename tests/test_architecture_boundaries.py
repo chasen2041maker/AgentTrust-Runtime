@@ -33,7 +33,17 @@ from agenttrust.schemas import utc_now_iso as legacy_utc_now_iso
 
 DOMAIN_DIR = Path(__file__).parents[1] / "src" / "agenttrust" / "domain"
 APPLICATION_DIR = Path(__file__).parents[1] / "src" / "agenttrust" / "application"
-ALLOWED_IMPORT_ROOTS = {"__future__", "dataclasses", "datetime", "fnmatch", "hashlib", "json", "typing", "agenttrust"}
+ALLOWED_IMPORT_ROOTS = {
+    "__future__",
+    "dataclasses",
+    "datetime",
+    "fnmatch",
+    "hashlib",
+    "json",
+    "typing",
+    "uuid",
+    "agenttrust",
+}
 APPLICATION_ALLOWED_IMPORT_ROOTS = {"__future__", "dataclasses", "pathlib", "typing", "agenttrust"}
 
 

@@ -57,6 +57,12 @@ class FactStorePort(Protocol):
     def __call__(self, path: Path, facts: Sequence[EvidenceRecord]) -> None: ...
 
 
+class ApprovalJournalPort(Protocol):
+    """Persist approval evidence events alongside a run's trace."""
+
+    def append(self, event: Mapping[str, object]) -> None: ...
+
+
 class ContextPackPort(Protocol):
     """Build and export a deterministic context pack."""
 

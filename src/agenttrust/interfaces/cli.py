@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,9 +18,14 @@ from agenttrust.runtime.recovery import restore_run
 from agenttrust.runtime.report import resolve_run_dir, timeline_lines, write_html_report, write_markdown_report
 from agenttrust.runtime.trace import verify_trace
 from agenttrust.adapters.evidence.export import export_ndjson
+from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
+from agenttrust.adapters.evidence.projecting_recorder import ProjectingTraceRecorder
+from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
 from agenttrust.adapters.evidence.sqlite_state import rebuild_state_from_traces
 from agenttrust.skills_lite import ensure_demo_skill, list_skills, load_skill
 from agenttrust.tools.registry import get_tool_spec, list_tool_specs
+from agenttrust.domain.approvals import ApprovalRequest
 
 
 def _project_root(path: str | None) -> Path:
@@ -82,6 +88,17 @@ def build_parser() -> argparse.ArgumentParser:
     state_parser = subparsers.add_parser("state", help="Derived SQLite state helpers.")
     state_subparsers = state_parser.add_subparsers(dest="state_command", required=True)
     state_subparsers.add_parser("rebuild", help="Rebuild state.db from verified JSONL evidence.")
+
+    approvals_parser = subparsers.add_parser("approvals", help="Persisted approval request helpers.")
+    approvals_subparsers = approvals_parser.add_subparsers(dest="approvals_command", required=True)
+    approvals_subparsers.add_parser("list", help="List approval requests.")
+    approval_inspect = approvals_subparsers.add_parser("inspect", help="Inspect one approval request.")
+    approval_inspect.add_argument("approval_id")
+    for command, help_text in (("approve", "Approve a pending request."), ("deny", "Deny a pending request.")):
+        decision_parser = approvals_subparsers.add_parser(command, help=help_text)
+        decision_parser.add_argument("approval_id")
+        decision_parser.add_argument("--reason", required=True)
+        decision_parser.add_argument("--approver")
 
     policy_parser = subparsers.add_parser("policy", help="Policy helpers.")
     policy_subparsers = policy_parser.add_subparsers(dest="policy_command", required=True)
@@ -234,6 +251,37 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(state_result.to_dict(), ensure_ascii=False, indent=2))
         return 0
 
+    if args.command == "approvals":
+        state = SQLiteStateProjection(project_root)
+        if args.approvals_command == "list":
+            print(json.dumps(state.list_approvals(), ensure_ascii=False, indent=2))
+            return 0
+        if args.approvals_command == "inspect":
+            approval = state.get_approval(args.approval_id)
+            if approval is None:
+                print(f"approval not found: {args.approval_id}", file=sys.stderr)
+                return 2
+            print(json.dumps(approval, ensure_ascii=False, indent=2))
+            return 0
+        approval = state.get_approval(args.approval_id)
+        if approval is None:
+            print(f"approval not found: {args.approval_id}", file=sys.stderr)
+            return 2
+        try:
+            decided = _decide_approval(
+                project_root,
+                state,
+                approval,
+                decision=args.approvals_command,
+                approver_id=args.approver or os.environ.get("AGENTTRUST_ACTOR_ID", "local-user"),
+                reason=args.reason,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"approval decision failed: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(decided.to_dict(), ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "policy" and args.policy_command == "validate":
         policy_path = (project_root / args.path).resolve()
         if not policy_path.exists():
@@ -352,6 +400,78 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error("unknown command")
     return 2
+
+
+def _decide_approval(
+    project_root: Path,
+    state: SQLiteStateProjection,
+    raw_approval: dict[str, object],
+    *,
+    decision: str,
+    approver_id: str,
+    reason: str,
+) -> ApprovalRequest:
+    approval = _approval_from_state(raw_approval)
+    if not approval.is_pending:
+        raise ValueError(f"approval {approval.approval_id} has already been decided")
+    run_dir = resolve_run_dir(project_root, approval.run_id)
+    verification = verify_trace(run_dir / "trace.jsonl")
+    if verification["valid"] is not True:
+        raise ValueError("approval source trace failed hash-chain verification")
+    session = state.get_session(approval.run_id)
+    if session is None:
+        raise ValueError(f"approval {approval.approval_id} has no persisted session")
+    recorder = TraceRecorder(run_dir)
+    recorder.bind(
+        actor_id=_state_text(session, "actor_id"),
+        agent_id=_state_optional_text(session, "agent_id"),
+        session_id=_state_text(session, "session_id"),
+        policy_version=_state_optional_text(session, "policy_version"),
+    )
+    if decision == "approve":
+        decided = approval.approve(approver_id, reason)
+    elif decision == "deny":
+        decided = approval.deny(approver_id, reason)
+    else:
+        raise ValueError(f"unknown approval decision: {decision}")
+    evidence = ProjectingTraceRecorder(recorder, state)
+    event = evidence.append("approval_decided", **decided.to_dict())
+    JsonlApprovalJournal(run_dir).append(event)
+    return decided
+
+
+def _approval_from_state(raw: dict[str, object]) -> ApprovalRequest:
+    return ApprovalRequest(
+        approval_id=_state_text(raw, "approval_id"),
+        run_id=_state_text(raw, "run_id"),
+        tool_call_id=_state_text(raw, "tool_call_id"),
+        tool_name=_state_text(raw, "tool_name"),
+        arguments_digest=_state_text(raw, "arguments_digest"),
+        policy_rule_id=_state_optional_text(raw, "policy_rule_id"),
+        reason=_state_text(raw, "reason"),
+        requested_at=_state_text(raw, "requested_at"),
+        expires_at=_state_optional_text(raw, "expires_at"),
+        decision=_state_text(raw, "decision"),
+        approver_id=_state_optional_text(raw, "approver_id"),
+        decision_reason=_state_optional_text(raw, "decision_reason"),
+        decided_at=_state_optional_text(raw, "decided_at"),
+    )
+
+
+def _state_text(raw: dict[str, object], key: str) -> str:
+    value = raw.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"persisted state requires a non-empty {key}")
+    return value
+
+
+def _state_optional_text(raw: dict[str, object], key: str) -> str | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"persisted state requires {key} to be a non-empty string or null")
+    return value
 
 
 if __name__ == "__main__":

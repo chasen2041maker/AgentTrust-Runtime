@@ -6,11 +6,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from agenttrust.application.ports import EvidenceRecord, EvidenceRecorderPort
+from agenttrust.application.ports import ApprovalJournalPort, EvidenceRecord, EvidenceRecorderPort
 from agenttrust.application.run_tool import RunToolUseCase, ToolRunOutcome
 from agenttrust.domain.lifecycle import SessionStatus, ToolCallStatus
 from agenttrust.domain.models import ToolIntent
 from agenttrust.domain.policy import HookRule
+from agenttrust.domain.approvals import ApprovalRequest
 from agenttrust.domain.sessions import AgentSession, SessionToolCall
 
 
@@ -21,6 +22,7 @@ class SessionToolRun:
     session: AgentSession
     tool_call: SessionToolCall
     outcome: ToolRunOutcome
+    approval_request: ApprovalRequest | None = None
 
 
 class GovernedSession:
@@ -36,6 +38,8 @@ class GovernedSession:
         run_dir: Path,
         runtime_mode: str,
         hooks: tuple[HookRule, ...],
+        approval_journal: ApprovalJournalPort | None = None,
+        defer_approvals: bool = False,
     ) -> None:
         self._session = session
         self._tool_runner = tool_runner
@@ -44,6 +48,8 @@ class GovernedSession:
         self._run_dir = run_dir
         self._runtime_mode = runtime_mode
         self._hooks = hooks
+        self._approval_journal = approval_journal
+        self._defer_approvals = defer_approvals
         self._sequence = 0
         self._started = False
         self._active_tool_call: SessionToolCall | None = None
@@ -107,6 +113,7 @@ class GovernedSession:
                 hooks=self._hooks,
                 facts_path=self._run_dir / "facts.jsonl",
                 on_tool_call_status=self._record_tool_status,
+                defer_approval=self._defer_approvals,
             )
         except Exception:
             if not self._session.is_terminal:
@@ -119,7 +126,25 @@ class GovernedSession:
         if completed_tool_call is None:
             raise RuntimeError("tool call lifecycle did not complete")
         self._facts.extend(outcome.facts)
-        return SessionToolRun(session=self._session, tool_call=completed_tool_call, outcome=outcome)
+        approval_request = None
+        if outcome.final_permission.final_effect == "ask":
+            approval_request = ApprovalRequest.create(
+                run_id=self._session.run_id,
+                tool_call_id=completed_tool_call.tool_call_id,
+                tool_name=completed_tool_call.tool_name,
+                arguments_digest=completed_tool_call.arguments_digest,
+                policy_rule_id=outcome.permission_decision.rule_id,
+                reason=outcome.permission_decision.reason,
+            )
+            approval_event = self._evidence.append("approval_requested", **approval_request.to_dict())
+            if self._approval_journal is not None:
+                self._approval_journal.append(approval_event)
+        return SessionToolRun(
+            session=self._session,
+            tool_call=completed_tool_call,
+            outcome=outcome,
+            approval_request=approval_request,
+        )
 
     def close(self) -> AgentSession:
         if not self._started:

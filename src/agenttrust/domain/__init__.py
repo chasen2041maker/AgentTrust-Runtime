@@ -6,6 +6,7 @@ from agenttrust.domain.decisions import (
     PermissionDecision,
     SandboxDecision,
 )
+from agenttrust.domain.approvals import ApprovalRequest
 from agenttrust.domain.lifecycle import LifecycleTransitionError, SessionStatus, ToolCallStatus
 from agenttrust.domain.models import ToolIntent, ToolResult, utc_now_iso
 from agenttrust.domain.policy import HookRule, Policy, PolicyRule
@@ -21,6 +22,7 @@ __all__ = [
     "PolicyRule",
     "SandboxDecision",
     "AgentSession",
+    "ApprovalRequest",
     "SessionStatus",
     "SessionToolCall",
     "ToolIntent",
