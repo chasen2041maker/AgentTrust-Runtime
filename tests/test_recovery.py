@@ -8,14 +8,31 @@ import pytest
 
 from agenttrust.runtime.recovery import restore_run
 from agenttrust.runtime.trace import TraceRecorder, verify_trace
+from agenttrust import AgentTrustRuntime
 
 
 def _backup_digest(content: bytes) -> str:
     return "sha256:" + sha256(content).hexdigest()
 
 
-def _record_backup_evidence(run_dir: Path, payload: dict[str, object]) -> None:
-    TraceRecorder(run_dir).append("backup_created", **payload)
+def _record_recovery_checkpoint(run_dir: Path, payload: dict[str, object]) -> None:
+    target = Path(str(payload["path"]))
+    post_write_sha256 = _backup_digest(target.read_bytes())
+    checkpoint = {
+        **payload,
+        "post_write_sha256": post_write_sha256,
+        "result_output_digest": post_write_sha256,
+    }
+    recorder = TraceRecorder(run_dir)
+    recorder.append(
+        "tool_result",
+        run_id=checkpoint["run_id"],
+        tool_call_id=checkpoint["tool_call_id"],
+        tool_name="write_file",
+        status="ok",
+        output_digest=post_write_sha256,
+    )
+    recorder.append("write_recovery_checkpoint", **checkpoint)
 
 
 def test_trace_verification_detects_tampering(tmp_path: Path) -> None:
@@ -55,7 +72,7 @@ def test_restore_skips_manifest_paths_outside_project_root(tmp_path: Path) -> No
         + "\n",
         encoding="utf-8",
     )
-    _record_backup_evidence(
+    _record_recovery_checkpoint(
         run_dir,
         {
             "run_id": "run_test",
@@ -101,7 +118,7 @@ def test_restore_skips_backup_paths_outside_run_backups(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    _record_backup_evidence(
+    _record_recovery_checkpoint(
         run_dir,
         {
             "run_id": "run_test",
@@ -130,7 +147,7 @@ def test_restore_uses_verified_backup_evidence_not_manifest(tmp_path: Path) -> N
     target.write_text("changed", encoding="utf-8")
     backup = backups_dir / "call_001.bak"
     backup.write_text("original", encoding="utf-8")
-    _record_backup_evidence(
+    _record_recovery_checkpoint(
         run_dir,
         {
             "run_id": "run_test",
@@ -158,7 +175,7 @@ def test_restore_uses_verified_backup_evidence_not_manifest(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    actions = restore_run(run_dir)
+    actions = restore_run(run_dir, dry_run=False)
 
     assert actions == [
         {
@@ -166,6 +183,7 @@ def test_restore_uses_verified_backup_evidence_not_manifest(tmp_path: Path) -> N
             "existed": True,
             "action": "restore",
             "dry_run": False,
+            "force": False,
         }
     ]
     assert target.read_text(encoding="utf-8") == "original"
@@ -180,7 +198,7 @@ def test_restore_rejects_tampered_trace_and_backup_bytes(tmp_path: Path) -> None
     target.write_text("changed", encoding="utf-8")
     backup = backups_dir / "call_001.bak"
     backup.write_text("original", encoding="utf-8")
-    _record_backup_evidence(
+    _record_recovery_checkpoint(
         run_dir,
         {
             "run_id": "run_test",
@@ -199,6 +217,77 @@ def test_restore_rejects_tampered_trace_and_backup_bytes(tmp_path: Path) -> None
     assert target.read_text(encoding="utf-8") == "changed"
 
     trace_path = run_dir / "trace.jsonl"
-    trace_path.write_text(trace_path.read_text(encoding="utf-8").replace("backup_created", "tampered", 1), encoding="utf-8")
+    trace_path.write_text(trace_path.read_text(encoding="utf-8").replace("write_recovery_checkpoint", "tampered", 1), encoding="utf-8")
     with pytest.raises(ValueError, match="invalid evidence"):
         restore_run(run_dir)
+
+
+def test_restore_preserves_user_changes_unless_forced(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".agenttrust" / "runs" / "run_test"
+    backups_dir = run_dir / "backups"
+    backups_dir.mkdir(parents=True)
+    target = tmp_path / "tmp" / "demo.txt"
+    target.parent.mkdir()
+    target.write_text("changed by agent", encoding="utf-8")
+    backup = backups_dir / "call_001.bak"
+    backup.write_text("original", encoding="utf-8")
+    _record_recovery_checkpoint(
+        run_dir,
+        {
+            "run_id": "run_test",
+            "tool_call_id": "call_001",
+            "path": str(target),
+            "existed": True,
+            "backup_path": str(backup),
+            "backup_sha256": _backup_digest(b"original"),
+            "created_at": "2026-07-08T00:00:00Z",
+        },
+    )
+    target.write_text("edited after agent run", encoding="utf-8")
+
+    actions = restore_run(run_dir, dry_run=False)
+
+    assert actions[0]["action"] == "skipped"
+    assert actions[0]["reason"] == "target changed after governed write"
+    assert target.read_text(encoding="utf-8") == "edited after agent run"
+    assert restore_run(run_dir, dry_run=False, force=True)[0]["action"] == "restore"
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+def test_restore_does_not_delete_a_user_modified_new_file(tmp_path: Path) -> None:
+    run_dir = tmp_path / ".agenttrust" / "runs" / "run_test"
+    target = tmp_path / "tmp" / "created.txt"
+    target.parent.mkdir()
+    target.write_text("agent version", encoding="utf-8")
+    _record_recovery_checkpoint(
+        run_dir,
+        {
+            "run_id": "run_test",
+            "tool_call_id": "call_001",
+            "path": str(target),
+            "existed": False,
+            "backup_path": None,
+            "backup_sha256": None,
+            "created_at": "2026-07-08T00:00:00Z",
+        },
+    )
+    target.write_text("user version", encoding="utf-8")
+
+    actions = restore_run(run_dir, dry_run=False)
+
+    assert actions[0]["action"] == "skipped"
+    assert actions[0]["reason"] == "target changed after governed write"
+    assert target.read_text(encoding="utf-8") == "user version"
+
+
+def test_failed_write_does_not_create_a_recovery_checkpoint(tmp_path: Path) -> None:
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="test")
+
+    with runtime.session(actor_id="alice") as session:
+        tool_run = session.execute("write_file", {"path": "failed.txt", "content": 42})
+
+    assert tool_run.outcome.result is not None
+    assert tool_run.outcome.result.status == "error"
+    events = [json.loads(line) for line in (session.run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert "write_recovery_checkpoint" not in [event["event_type"] for event in events]
+    assert restore_run(session.run_dir) == []

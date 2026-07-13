@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
+from agenttrust.adapters.evidence.projecting_recorder import ProjectingTraceRecorder
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection, rebuild_state_from_traces
 from agenttrust.cli import main
 
@@ -173,3 +174,22 @@ def test_state_rebuild_cli_uses_the_jsonl_evidence_source(tmp_path: Path, capsys
 
     payload = json.loads(capsys.readouterr().out)
     assert payload == {"traces_scanned": 1, "runs_projected": 1, "events_projected": 10}
+
+
+def test_projecting_recorder_does_not_hide_invalid_lifecycle_events(tmp_path: Path) -> None:
+    class InvalidLifecycleProjection:
+        rebuilt = False
+
+        def apply_event(self, event: dict[str, object]) -> None:
+            raise ValueError("invalid lifecycle")
+
+        def rebuild(self) -> None:
+            self.rebuilt = True
+
+    projection = InvalidLifecycleProjection()
+    recorder = ProjectingTraceRecorder(TraceRecorder(tmp_path / "run"), projection)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="invalid lifecycle"):
+        recorder.append("session_status_changed", run_id="run", status="completed")
+
+    assert projection.rebuilt is False

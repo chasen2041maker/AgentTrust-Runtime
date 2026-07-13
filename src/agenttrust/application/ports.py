@@ -45,6 +45,18 @@ class RecoveryCheckpointPort(Protocol):
     def __call__(self, intent: ToolIntent, project_root: Path, run_dir: Path) -> EvidenceRecord | None: ...
 
 
+class RecoveryCheckpointBindingPort(Protocol):
+    """Bind a pre-write backup to a successful, observed write result."""
+
+    def __call__(
+        self,
+        intent: ToolIntent,
+        result: ToolResult,
+        checkpoint: EvidenceRecord,
+        project_root: Path,
+    ) -> EvidenceRecord | None: ...
+
+
 class FactMapperPort(Protocol):
     """Map a tool result into independently verifiable facts."""
 
@@ -74,4 +86,10 @@ class ContextPackPort(Protocol):
 class RecoveryPort(Protocol):
     """Restore a previous mutating run through a recovery adapter."""
 
-    def restore(self, run_dir: Path, only_file: str | None = None, dry_run: bool = False) -> list[dict[str, object]]: ...
+    def restore(
+        self,
+        run_dir: Path,
+        only_file: str | None = None,
+        dry_run: bool = True,
+        force: bool = False,
+    ) -> list[dict[str, object]]: ...

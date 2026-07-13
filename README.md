@@ -33,7 +33,7 @@
 
 ![AgentTrust Runtime control flow](docs/assets/runtime-flow.svg)
 
-> **v0.5.1 Beta / developer preview.** AgentTrust is suitable for local development, integration validation, and deterministic control regression. It is not a production-security guarantee. Review permissions, perform threat modeling, and use environment-level safeguards before connecting real systems.
+> **v0.5.2 Beta / developer preview.** AgentTrust is suitable for local development, integration validation, and deterministic control regression. It is not a production-security guarantee. Review permissions, perform threat modeling, and use environment-level safeguards before connecting real systems.
 
 ## What is AgentTrust?
 
@@ -94,7 +94,7 @@ from pathlib import Path
 
 from agenttrust import AgentTrustRuntime
 
-runtime = AgentTrustRuntime(Path("."), runtime_mode="interactive")
+runtime = AgentTrustRuntime(Path("."), runtime_mode="interactive", approval_mode="deferred")
 
 with runtime.session(actor_id="alice", agent_id="coding-agent") as session:
     outcome = session.execute(
@@ -185,7 +185,7 @@ agenttrust mcp trust <server> --tool read_file
 - Discovery and inspection do not start the server or print environment-variable values.
 - Real calls require both server consent and tool-level trust.
 - Command, description, and input-schema drift invalidate trust and block subsequent calls.
-- A missing config fails outside test mode unless the request is explicitly simulated.
+- Simulated calls are accepted only in test mode or when the runtime explicitly enables simulation; their facts are marked `test_only` and cannot verify a normal final answer.
 - Sandbox profiles are policy metadata today; they are **not** OS-level process or network isolation.
 
 ## Evidence, recovery, and reports
@@ -194,13 +194,14 @@ agenttrust mcp trust <server> --tool read_file
 
 Evidence events are append-oriented JSONL records with previous-event hashes. `agenttrust evidence verify` validates a trace before replay, restore, or OpenTelemetry export. `agenttrust state rebuild` can reconstruct the local SQLite projection from verified traces.
 
-For a governed `write_file`, the runtime keeps a run-local backup and validates recovery paths and backup digests. Restoration is file-oriented, should be reviewed, and is not a transaction system for arbitrary side effects.
+For a governed `write_file`, the runtime records a restore point only after the write succeeds and binds the actual post-write digest. Restore is preview-only by default; a changed target is skipped unless `--force` is explicitly supplied.
 
 ```powershell
 agenttrust evidence verify <run_id>
 agenttrust evidence export <run_id>
 agenttrust state rebuild
-agenttrust restore <run_id> --dry-run
+agenttrust restore <run_id>
+agenttrust restore <run_id> --apply
 agenttrust report <run_id> --format html
 ```
 
@@ -209,6 +210,8 @@ Install `.[otel]` to rebuild evidence as OTLP HTTP spans for a backend such as P
 ## Final-answer verification
 
 `finalize_answer()` records a final answer and checks requested fact keys against facts produced in the current session. This adds a checkable link between a tool result and a claim; it does not prove the completeness or truth of arbitrary model output.
+
+Set `verification.mode: groundguard_required` in policy to fail closed on missing or invalid GroundGuard output. The default `fallback` mode keeps the deterministic built-in verifier available for local development.
 
 ```python
 result = session.finalize_answer(
@@ -261,15 +264,15 @@ Available now:
 Known limitations:
 
 - Local evidence has no external signature, trusted timestamp, or immutable storage anchor.
-- Runtime session serialization is in-process; do not resume the same run from multiple processes.
+- Same-run evidence and state transitions use a cross-platform run lock; external signatures and immutable storage are still outside the local runtime boundary.
 - Custom functions wrapped with `govern()` must be registered again after a restart before resume.
-- Approval expiry is enforced when an expiry exists, but a configurable default approval TTL is not yet available.
+- Approval requests default to a one-hour TTL, configurable with `approvals.default_ttl_seconds` or a session override.
 - MCP sandbox profiles do not enforce OS-level process or network isolation.
 - File restoration is not a general-purpose transaction or rollback mechanism.
 
 ## Roadmap
 
-The next reliability work focuses on cross-process run coordination, configurable approval lifetimes, stronger evidence anchoring, successful-write recovery binding, and OS-level MCP isolation. The broader implementation history and planned boundaries are in the [architecture roadmap](docs/refactor-roadmap.md) and [enterprise architecture](docs/enterprise-architecture.md).
+The next reliability work focuses on stronger evidence anchoring, OS-level MCP isolation, and broader policy-pack interoperability. The broader implementation history and planned boundaries are in the [architecture roadmap](docs/refactor-roadmap.md) and [enterprise architecture](docs/enterprise-architecture.md).
 
 ## Documentation
 

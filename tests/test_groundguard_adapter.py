@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import agenttrust.adapters.verification.verifier as verifier
+
 from agenttrust.groundguard_adapter import map_tool_result, verify_answer
 from agenttrust.schemas import ToolResult
 
@@ -34,3 +36,25 @@ def test_verify_answer_detects_contradiction() -> None:
 
     assert report.status == "contradicted"
     assert report.contradicted_keys == ("revenue",)
+
+
+def test_groundguard_required_never_silently_uses_the_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(verifier, "FactGate", None)
+    monkeypatch.setattr(verifier, "report_to_versioned_dict", None)
+    result = ToolResult(
+        run_id="run",
+        tool_call_id="call",
+        tool_name="shell",
+        status="ok",
+        output_preview="AGENTTRUST_FACTS:\nrevenue=42 USD\nEND_AGENTTRUST_FACTS\n",
+    )
+
+    report = verify_answer(
+        "Revenue was 42 [fact:revenue].",
+        map_tool_result(result),
+        ["revenue"],
+        verification_mode="groundguard_required",
+    )
+
+    assert report.status == "unverified"
+    assert report.engine == "groundguard-required"

@@ -79,6 +79,9 @@ def test_persisted_approval_uses_trace_journal_sqlite_and_cli_decisions(tmp_path
     assert main(["--project-root", str(tmp_path), "approvals", "inspect", request.approval_id]) == 0
     inspected = json.loads(capsys.readouterr().out)
     assert inspected["arguments_digest"] == request.arguments_digest
+    assert inspected["arguments"]["path"] == "summary.txt"
+    assert inspected["arguments"]["content_bytes"] == len("pending".encode("utf-8"))
+    assert inspected["arguments"]["content_sha256"].startswith("sha256:")
 
     assert (
         main(
@@ -123,3 +126,23 @@ def test_persisted_approval_uses_trace_journal_sqlite_and_cli_decisions(tmp_path
         == 2
     )
     assert "already been decided" in capsys.readouterr().err
+
+
+def test_approval_inspection_redacts_sensitive_content_and_sets_a_default_ttl(tmp_path: Path, capsys) -> None:
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="interactive")
+    secret_content = "API_TOKEN=super-secret-value\nprint('review me')\n"
+
+    with runtime.session(actor_id="alice", session_id="session_review") as session:
+        pending = session.execute("write_file", {"path": "src/app.py", "content": secret_content})
+
+    request = pending.approval_request
+    assert request is not None
+    assert request.expires_at is not None
+    assert request.arguments_preview["content_preview"] == "API_TOKEN=[REDACTED]\nprint('review me')\n"
+    assert "super-secret-value" not in json.dumps(request.to_dict())
+
+    assert main(["--project-root", str(tmp_path), "approvals", "inspect", request.approval_id]) == 0
+    inspected = json.loads(capsys.readouterr().out)
+    assert inspected["arguments"]["path"] == "src/app.py"
+    assert inspected["arguments"]["content_preview"] == "API_TOKEN=[REDACTED]\nprint('review me')\n"
+    assert "super-secret-value" not in json.dumps(inspected)

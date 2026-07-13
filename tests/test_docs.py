@@ -49,8 +49,8 @@ def test_release_metadata_and_readme_describe_the_current_runtime() -> None:
     readme = _read("README.md")
     readme_zh = _read("README_zh.md")
 
-    assert project["project"]["version"] == "0.5.1"
-    assert agenttrust.__version__ == "0.5.1"
+    assert project["project"]["version"] == "0.5.2"
+    assert agenttrust.__version__ == "0.5.2"
     for marker in (
         "AgentTrustSession",
         "Local MCP stdio governance",

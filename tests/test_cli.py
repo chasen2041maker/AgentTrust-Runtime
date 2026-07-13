@@ -67,6 +67,40 @@ def test_replay_prints_timeline(tmp_path: Path, monkeypatch, capsys) -> None:
     assert "tool_result: shell -> ok" in output
 
 
+def test_replay_report_and_export_reject_tampered_evidence(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["run-fixture", "verified_answer", "--mode", "test"]) == 0
+    run_id = _run_id_from_output(capsys.readouterr().out)
+    run_dir = tmp_path / ".agenttrust" / "runs" / run_id
+    trace_path = run_dir / "trace.jsonl"
+    trace_path.write_text(trace_path.read_text(encoding="utf-8").replace("run_started", "tampered", 1), encoding="utf-8")
+
+    assert main(["replay", run_id]) == 2
+    assert "invalid evidence trace" in capsys.readouterr().err
+    assert main(["report", run_id]) == 2
+    assert "invalid evidence trace" in capsys.readouterr().err
+    assert not (run_dir / "report.md").exists()
+    assert main(["evidence", "export", run_id]) == 2
+    assert "invalid evidence trace" in capsys.readouterr().err
+    assert not (run_dir / "evidence-export.ndjson").exists()
+
+
+def test_report_uses_verified_groundguard_event_not_mutable_sidecar(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["run-fixture", "verified_answer", "--mode", "test"]) == 0
+    run_id = _run_id_from_output(capsys.readouterr().out)
+    run_dir = tmp_path / ".agenttrust" / "runs" / run_id
+    (run_dir / "groundguard-report.json").write_text(
+        json.dumps({"status": "forged", "required_fact_keys": ["forged"]}),
+        encoding="utf-8",
+    )
+
+    assert main(["report", run_id]) == 0
+    report = Path(capsys.readouterr().out.strip()).read_text(encoding="utf-8")
+    assert "status: `verified`" in report
+    assert "forged" not in report
+
+
 def test_evidence_verify_accepts_an_untampered_run(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
     assert main(["run-fixture", "verified_answer", "--mode", "test"]) == 0
@@ -338,14 +372,14 @@ def test_write_and_restore_fixture_records_backup_and_restore_trace(tmp_path: Pa
     run_id = _run_id_from_output(capsys.readouterr().out)
     assert target.read_text(encoding="utf-8") == "changed by agent"
     events = _events_for_run(tmp_path, run_id)
-    assert any(event["event_type"] == "backup_created" for event in events)
+    assert any(event["event_type"] == "write_recovery_checkpoint" for event in events)
 
     assert main(["restore", run_id, "--dry-run"]) == 0
     dry_run_actions = json.loads(capsys.readouterr().out)
     assert dry_run_actions[0]["action"] == "restore"
     assert target.read_text(encoding="utf-8") == "changed by agent"
 
-    assert main(["restore", run_id]) == 0
+    assert main(["restore", run_id, "--apply"]) == 0
     restore_actions = json.loads(capsys.readouterr().out)
     assert restore_actions[0]["action"] == "restore"
     assert target.read_text(encoding="utf-8") == "original"

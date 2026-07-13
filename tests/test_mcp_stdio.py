@@ -78,8 +78,8 @@ def test_mcp_without_configuration_returns_an_error_outside_test_mode(tmp_path: 
     assert "configuration was not found" in (result.error or "")
 
 
-def test_explicitly_simulated_mcp_call_is_marked_in_evidence_metadata(tmp_path: Path) -> None:
-    intent = ToolIntent(
+def test_explicitly_simulated_mcp_call_requires_test_or_runtime_capability(tmp_path: Path) -> None:
+    interactive_intent = ToolIntent(
         run_id="run_mcp",
         tool_call_id="call_001",
         tool_name="mcp_tool",
@@ -88,11 +88,25 @@ def test_explicitly_simulated_mcp_call_is_marked_in_evidence_metadata(tmp_path: 
         runtime_mode="interactive",
     )
 
-    result = ToolGateway().execute(intent, tmp_path)
+    denied = ToolGateway().execute(interactive_intent, tmp_path)
+
+    assert denied.status == "error"
+    assert denied.metadata["simulation_denied"] is True
+
+    test_intent = ToolIntent(
+        run_id="run_mcp",
+        tool_call_id="call_002",
+        tool_name="mcp_tool",
+        arguments={"server": "simulated", "tool": "echo", "input": {}, "simulated": True},
+        source="test",
+        runtime_mode="test",
+    )
+    result = ToolGateway().execute(test_intent, tmp_path)
 
     assert result.status == "ok"
     assert result.metadata["mcp_execution_mode"] == "simulated"
     assert result.metadata["mcp_simulation_explicit"] is True
+    assert result.metadata["simulated"] is True
 
 
 def test_schema_drift_marks_existing_mcp_trust_stale_and_blocks_call(tmp_path: Path) -> None:

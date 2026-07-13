@@ -8,19 +8,25 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from agenttrust.adapters.evidence.run_lock import RunLock
 from agenttrust.domain.models import utc_now_iso
 
 
 class TraceRecorder:
     """Persist evidence events to `.agenttrust/runs/{run_id}/trace.jsonl`."""
 
-    def __init__(self, run_dir: Path, context: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        run_dir: Path,
+        context: dict[str, Any] | None = None,
+        run_lock: RunLock | None = None,
+    ) -> None:
         self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.trace_path = self.run_dir / "trace.jsonl"
-        self._previous_hash = _last_event_hash(self.trace_path)
         self._context = dict(context or {})
         self._lock = RLock()
+        self._run_lock = run_lock or RunLock(self.run_dir)
 
     def bind(self, **context: Any) -> None:
         """Attach run-scoped governance metadata to subsequent evidence events."""
@@ -29,19 +35,23 @@ class TraceRecorder:
 
     def append(self, event_type: str, **payload: Any) -> dict[str, Any]:
         with self._lock:
-            event = {
-                "event_type": event_type,
-                "created_at": utc_now_iso(),
-                **self._context,
-                **payload,
-            }
-            event["previous_hash"] = self._previous_hash
-            event["event_hash"] = _event_hash(event)
-            with self.trace_path.open("a", encoding="utf-8", newline="\n") as trace_file:
-                trace_file.write(json.dumps(event, ensure_ascii=False, sort_keys=True))
-                trace_file.write("\n")
-            self._previous_hash = str(event["event_hash"])
-            return event
+            with self._run_lock:
+                events = read_trace(self.trace_path) if self.trace_path.exists() else []
+                verification = verify_events(events)
+                if verification["valid"] is not True:
+                    raise ValueError(f"cannot append to invalid evidence trace: {verification.get('reason', 'unknown')}")
+                event = {
+                    "event_type": event_type,
+                    "created_at": utc_now_iso(),
+                    **self._context,
+                    **payload,
+                }
+                event["previous_hash"] = verification["head_hash"]
+                event["event_hash"] = _event_hash(event)
+                with self.trace_path.open("a", encoding="utf-8", newline="\n") as trace_file:
+                    trace_file.write(json.dumps(event, ensure_ascii=False, sort_keys=True))
+                    trace_file.write("\n")
+                return event
 
 
 def read_trace(trace_path: Path) -> list[dict[str, Any]]:
@@ -76,17 +86,20 @@ def verify_events(events: list[dict[str, Any]]) -> dict[str, object]:
     return {"valid": True, "event_count": len(events), "head_hash": previous_hash}
 
 
+def read_verified_events(run_dir: Path) -> list[dict[str, Any]]:
+    """Read one trace snapshot, verify it, and bind every event to its run directory."""
+
+    events = read_trace(run_dir / "trace.jsonl")
+    verification = verify_events(events)
+    if verification["valid"] is not True:
+        raise ValueError(f"invalid evidence trace: {verification.get('reason', 'unknown')}")
+    for event in events:
+        if event.get("run_id") != run_dir.name:
+            raise ValueError("evidence event run_id does not match run directory")
+    return events
+
+
 def _event_hash(event: dict[str, Any]) -> str:
     canonical = {key: value for key, value in event.items() if key != "event_hash"}
     payload = json.dumps(canonical, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return "sha256:" + sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _last_event_hash(trace_path: Path) -> str | None:
-    if not trace_path.exists():
-        return None
-    events = read_trace(trace_path)
-    if not events:
-        return None
-    value = events[-1].get("event_hash")
-    return value if isinstance(value, str) else None

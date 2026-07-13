@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
-from agenttrust.adapters.evidence.jsonl_store import read_trace
+from agenttrust.adapters.evidence.jsonl_store import read_verified_events
 
 
 def export_ndjson(run_dir: Path) -> Path:
     """Export verified-shape evidence events to a stable NDJSON artifact."""
-    trace_path = run_dir / "trace.jsonl"
     target = run_dir / "evidence-export.ndjson"
-    with target.open("w", encoding="utf-8", newline="\n") as handle:
-        for event in read_trace(trace_path):
+    events = read_verified_events(run_dir)
+    with NamedTemporaryFile("w", encoding="utf-8", newline="\n", dir=run_dir, delete=False) as handle:
+        temporary_path = Path(handle.name)
+        for event in events:
             payload = {"resource": "agenttrust.runtime", "event": event}
             handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
+    os.replace(temporary_path, target)
     return target

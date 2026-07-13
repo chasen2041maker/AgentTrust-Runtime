@@ -30,6 +30,7 @@ from agenttrust.runtime.report import resolve_run_dir, timeline_lines, write_htm
 from agenttrust.runtime.trace import verify_trace
 from agenttrust.adapters.evidence.export import export_ndjson
 from agenttrust.adapters.evidence.otel import export_otel_trace
+from agenttrust.adapters.evidence.run_lock import RunLock
 from agenttrust.interfaces.python_api import AgentTrustRuntime
 from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace
@@ -91,7 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     restore_parser = subparsers.add_parser("restore", help="Restore write_file changes from a run.")
     restore_parser.add_argument("run_id")
     restore_parser.add_argument("--file")
-    restore_parser.add_argument("--dry-run", action="store_true")
+    restore_parser.add_argument("--apply", action="store_true", help="Apply the restore instead of previewing it.")
+    restore_parser.add_argument("--dry-run", action="store_true", help=argparse.SUPPRESS)
+    restore_parser.add_argument("--force", action="store_true", help="Apply despite a post-write digest conflict.")
 
     evidence_parser = subparsers.add_parser("evidence", help="Evidence integrity helpers.")
     evidence_subparsers = evidence_parser.add_subparsers(dest="evidence_command", required=True)
@@ -268,21 +271,38 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "replay":
-        run_dir = resolve_run_dir(project_root, args.run_id)
-        for line in timeline_lines(run_dir):
-            print(line)
+        try:
+            run_dir = resolve_run_dir(project_root, args.run_id)
+            for line in timeline_lines(run_dir):
+                print(line)
+        except (OSError, ValueError) as exc:
+            print(f"replay failed: {exc}", file=sys.stderr)
+            return 2
         return 0
 
     if args.command == "report":
-        if args.format == "html":
-            report_path = write_html_report(resolve_run_dir(project_root, args.run_id))
-        else:
-            report_path = write_markdown_report(resolve_run_dir(project_root, args.run_id))
+        try:
+            if args.format == "html":
+                report_path = write_html_report(resolve_run_dir(project_root, args.run_id))
+            else:
+                report_path = write_markdown_report(resolve_run_dir(project_root, args.run_id))
+        except (OSError, ValueError) as exc:
+            print(f"report failed: {exc}", file=sys.stderr)
+            return 2
         print(report_path)
         return 0
 
     if args.command == "restore":
-        actions = restore_run(resolve_run_dir(project_root, args.run_id), only_file=args.file, dry_run=args.dry_run)
+        try:
+            actions = restore_run(
+                resolve_run_dir(project_root, args.run_id),
+                only_file=args.file,
+                dry_run=not args.apply or args.dry_run,
+                force=args.force,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"restore failed: {exc}", file=sys.stderr)
+            return 2
         print(json.dumps(actions, ensure_ascii=False, indent=2))
         return 0
 
@@ -292,7 +312,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if verification_result["valid"] else 2
 
     if args.command == "evidence" and args.evidence_command == "export":
-        print(export_ndjson(resolve_run_dir(project_root, args.run_id)))
+        try:
+            print(export_ndjson(resolve_run_dir(project_root, args.run_id)))
+        except (OSError, ValueError) as exc:
+            print(f"evidence export failed: {exc}", file=sys.stderr)
+            return 2
         return 0
 
     if args.command == "evidence" and args.evidence_command == "export-otel":
@@ -525,6 +549,28 @@ def _decide_approval(
     if not approval.is_pending:
         raise ValueError(f"approval {approval.approval_id} has already been decided")
     run_dir = resolve_run_dir(project_root, approval.run_id)
+    with RunLock(run_dir) as operation_lock:
+        return _decide_approval_locked(
+            state,
+            approval,
+            decision=decision,
+            approver_id=approver_id,
+            reason=reason,
+            run_dir=run_dir,
+            operation_lock=operation_lock,
+        )
+
+
+def _decide_approval_locked(
+    state: SQLiteStateProjection,
+    approval: ApprovalRequest,
+    *,
+    decision: str,
+    approver_id: str,
+    reason: str,
+    run_dir: Path,
+    operation_lock: RunLock,
+) -> ApprovalRequest:
     replayed = replay_verified_run(run_dir)
     replayed_approval = next(
         (item for item in replayed.approvals if item.approval_id == approval.approval_id),
@@ -532,20 +578,32 @@ def _decide_approval(
     )
     if replayed_approval is None or replayed_approval != approval:
         raise ValueError("approval source trace no longer matches the requested approval")
-    recorder = TraceRecorder(run_dir)
+    recorder = TraceRecorder(run_dir, run_lock=operation_lock)
     recorder.bind(
         actor_id=replayed.session.actor_id,
         agent_id=replayed.session.agent_id,
         session_id=replayed.session.session_id,
         policy_version=replayed.session.policy_version,
     )
-    if decision == "approve":
+    expired = approval.is_expired()
+    if expired:
+        decided = approval.expire(approver_id)
+    elif decision == "approve":
         decided = approval.approve(approver_id, reason)
     elif decision == "deny":
         decided = approval.deny(approver_id, reason)
     else:
         raise ValueError(f"unknown approval decision: {decision}")
+    state.rebuild()
     evidence = ProjectingTraceRecorder(recorder, state)
+    if expired:
+        evidence.append(
+            "approval_expired",
+            run_id=approval.run_id,
+            tool_call_id=approval.tool_call_id,
+            approval_id=approval.approval_id,
+            expires_at=approval.expires_at,
+        )
     event = evidence.append("approval_decided", **decided.to_dict())
     JsonlApprovalJournal(run_dir).append(event)
     return decided

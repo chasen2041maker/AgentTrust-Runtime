@@ -16,6 +16,12 @@ mode: default
 final_answer:
   on_incomplete: warn
 
+verification:
+  mode: fallback
+
+approvals:
+  default_ttl_seconds: 3600
+
 rules:
   - id: block-secret-files
     tool: read_file

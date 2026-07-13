@@ -28,7 +28,7 @@ from agenttrust.permissions import (
     load_policy,
     request_interactive_approval,
 )
-from agenttrust.runtime.recovery import create_backup_for_write
+from agenttrust.runtime.recovery import bind_successful_write, create_backup_for_write
 from agenttrust.schemas import ToolIntent
 from agenttrust.skills_lite import load_skill
 
@@ -281,6 +281,7 @@ def run_fixture(
         evaluate_hooks=evaluate_pre_tool_hooks,
         request_approval=request_interactive_approval,
         create_recovery_checkpoint=create_backup_for_write,
+        bind_recovery_checkpoint=bind_successful_write,
         map_facts=map_tool_result,
         store_facts=write_facts,
     )
@@ -417,7 +418,13 @@ def run_fixture(
     if fixture.final_answer is not None:
         (run_dir / "final-answer.md").write_text(fixture.final_answer, encoding="utf-8")
         recorder.append("final_answer", run_id=run_id, answer=fixture.final_answer)
-        coverage_report = verify_answer(fixture.final_answer, all_facts, list(fixture.required_fact_keys))
+        coverage_report = verify_answer(
+            fixture.final_answer,
+            all_facts,
+            list(fixture.required_fact_keys),
+            allow_simulated_facts=runtime_mode == "test",
+            verification_mode=policy.verification_mode,
+        )
         coverage_status = coverage_report.status
         write_coverage_report(run_dir / "groundguard-report.json", coverage_report)
         recorder.append("groundguard_check", run_id=run_id, **coverage_report.to_dict())

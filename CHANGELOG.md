@@ -2,6 +2,23 @@
 
 All notable changes to AgentTrust Runtime are documented here.
 
+## 0.5.2 - 2026-07-13
+
+### Security
+
+- Policy precedence now preserves hard registry denials while allowing explicit policy `allow` rules to override a registered tool's ordinary default `ask`.
+- Deferred approvals include redacted review parameters, a bound digest, and a policy default TTL of one hour. Runtime mode and approval mode are separate; SDK sessions defer by default and never unexpectedly prompt.
+- Simulated tool results are restricted to test mode or an explicit runtime capability. Facts preserve `real`/`simulated` provenance and `trusted`/`test_only` trust state.
+- Reports, replay, NDJSON export, restore, and OpenTelemetry export consume a verified evidence snapshot. Restore points are written only after a successful write and bind the observed post-write digest.
+- Restore previews are the CLI default. Applying a restore requires `--apply`; user-modified files are skipped unless `--force` is supplied.
+- Evidence appends use a cross-platform run lock and a fresh verified trace head. Resume, cancellation, approval decisions, and restore hold that lock across their full state transition.
+
+### Changed
+
+- SQLite remains a rebuildable projection, but evidence lifecycle `ValueError`s now propagate rather than being hidden by projection fallback.
+- Final-answer verification supports `verification.mode: groundguard_required`, which returns an explicit unverified result instead of silently falling back when GroundGuard is unavailable or invalid.
+- CI now installs and smoke-tests every declared optional extra: GroundGuard, OpenTelemetry, OpenAI Agents, LangGraph, and Pydantic AI.
+
 ## 0.5.1 - 2026-07-13
 
 ### Security

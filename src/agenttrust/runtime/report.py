@@ -5,17 +5,21 @@ from __future__ import annotations
 from pathlib import Path
 
 import html
-import json
-
-from agenttrust.runtime.trace import read_trace
+from agenttrust.adapters.evidence.jsonl_store import read_verified_events
 
 
 def resolve_run_dir(project_root: Path, run_id: str) -> Path:
-    return project_root / ".agenttrust" / "runs" / run_id
+    if not isinstance(run_id, str) or not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
+        raise ValueError("run_id must name one run directory")
+    runs_root = (project_root / ".agenttrust" / "runs").resolve()
+    run_dir = (runs_root / run_id).resolve()
+    if run_dir.parent != runs_root:
+        raise ValueError("run_id escapes the runs directory")
+    return run_dir
 
 
 def timeline_lines(run_dir: Path) -> list[str]:
-    events = read_trace(run_dir / "trace.jsonl")
+    events = read_verified_events(run_dir)
     lines: list[str] = []
     for event in events:
         event_type = event.get("event_type", "unknown")
@@ -39,8 +43,8 @@ def timeline_lines(run_dir: Path) -> list[str]:
 
 
 def write_markdown_report(run_dir: Path) -> Path:
-    events = read_trace(run_dir / "trace.jsonl")
-    coverage = _read_json(run_dir / "groundguard-report.json")
+    events = read_verified_events(run_dir)
+    coverage = _groundguard_coverage(events)
     report_path = run_dir / "report.md"
     lines = ["# AgentTrust Run Report", ""]
     if coverage:
@@ -86,7 +90,8 @@ def write_html_report(run_dir: Path) -> Path:
     return html_path
 
 
-def _read_json(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+def _groundguard_coverage(events: list[dict[str, object]]) -> dict[str, object]:
+    for event in reversed(events):
+        if event.get("event_type") == "groundguard_check":
+            return dict(event)
+    return {}

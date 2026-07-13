@@ -9,8 +9,9 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Mapping
 
-from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace, verify_events
-from agenttrust.domain.models import ToolIntent, utc_now_iso
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_verified_events
+from agenttrust.adapters.evidence.run_lock import RunLock
+from agenttrust.domain.models import ToolIntent, ToolResult, utc_now_iso
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,34 @@ class BackupRecord:
             "existed": self.existed,
             "backup_path": self.backup_path,
             "backup_sha256": self.backup_sha256,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True)
+class WriteRecoveryCheckpoint:
+    """A restore point bound to a successful, observed file write."""
+
+    run_id: str
+    tool_call_id: str
+    path: str
+    existed: bool
+    backup_path: str | None
+    backup_sha256: str | None
+    post_write_sha256: str
+    result_output_digest: str
+    created_at: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "run_id": self.run_id,
+            "tool_call_id": self.tool_call_id,
+            "path": self.path,
+            "existed": self.existed,
+            "backup_path": self.backup_path,
+            "backup_sha256": self.backup_sha256,
+            "post_write_sha256": self.post_write_sha256,
+            "result_output_digest": self.result_output_digest,
             "created_at": self.created_at,
         }
 
@@ -68,6 +97,40 @@ def create_backup_for_write(intent: ToolIntent, project_root: Path, run_dir: Pat
     return record
 
 
+def bind_successful_write(
+    intent: ToolIntent,
+    result: ToolResult,
+    checkpoint: object,
+    project_root: Path,
+) -> WriteRecoveryCheckpoint | None:
+    """Confirm the actual post-write bytes before making a backup recoverable."""
+
+    if (
+        intent.tool_name != "write_file"
+        or result.status != "ok"
+        or not isinstance(checkpoint, BackupRecord)
+        or result.output_digest is None
+    ):
+        return None
+    target = Path(checkpoint.path).resolve(strict=False)
+    if not _is_inside(project_root.resolve(), target) or not target.is_file():
+        return None
+    post_write_sha256 = _sha256(target.read_bytes())
+    if post_write_sha256 != result.output_digest:
+        return None
+    return WriteRecoveryCheckpoint(
+        run_id=checkpoint.run_id,
+        tool_call_id=checkpoint.tool_call_id,
+        path=checkpoint.path,
+        existed=checkpoint.existed,
+        backup_path=checkpoint.backup_path,
+        backup_sha256=checkpoint.backup_sha256,
+        post_write_sha256=post_write_sha256,
+        result_output_digest=result.output_digest,
+        created_at=utc_now_iso(),
+    )
+
+
 def load_backup_records(run_dir: Path) -> list[BackupRecord]:
     manifest = run_dir / "backups" / "manifest.jsonl"
     if not manifest.exists():
@@ -91,13 +154,29 @@ def load_backup_records(run_dir: Path) -> list[BackupRecord]:
     return records
 
 
-def restore_run(run_dir: Path, only_file: str | None = None, dry_run: bool = False) -> list[dict[str, object]]:
+def restore_run(
+    run_dir: Path,
+    only_file: str | None = None,
+    dry_run: bool = True,
+    force: bool = False,
+) -> list[dict[str, object]]:
     run_dir = run_dir.resolve()
+    with RunLock(run_dir) as operation_lock:
+        return _restore_run_locked(run_dir, only_file, dry_run, force, operation_lock)
+
+
+def _restore_run_locked(
+    run_dir: Path,
+    only_file: str | None,
+    dry_run: bool,
+    force: bool,
+    operation_lock: RunLock,
+) -> list[dict[str, object]]:
     project_root = _project_root_from_run_dir(run_dir)
     backups_root = (run_dir / "backups").resolve()
-    records = _backup_records_from_verified_trace(run_dir)
+    records = _recovery_checkpoints_from_verified_trace(run_dir)
     actions: list[dict[str, object]] = []
-    recorder = TraceRecorder(run_dir)
+    recorder = TraceRecorder(run_dir, run_lock=operation_lock)
     for record in reversed(records):
         target = Path(record.path).resolve(strict=False)
         if only_file and Path(only_file).name != target.name and str(target) != only_file:
@@ -107,6 +186,7 @@ def restore_run(run_dir: Path, only_file: str | None = None, dry_run: bool = Fal
             "existed": record.existed,
             "action": "restore" if record.existed else "delete_created",
             "dry_run": dry_run,
+            "force": force,
         }
         if not _is_inside(project_root, target):
             skipped = {**action, "action": "skipped", "reason": "restore path escapes project_root"}
@@ -136,6 +216,11 @@ def restore_run(run_dir: Path, only_file: str | None = None, dry_run: bool = Fal
                 actions.append(skipped)
                 recorder.append("restore_skipped", run_id=record.run_id, tool_call_id=record.tool_call_id, **skipped)
                 continue
+        if not force and _post_write_state_changed(target, record.post_write_sha256):
+            conflict = {**action, "action": "skipped", "reason": "target changed after governed write"}
+            actions.append(conflict)
+            recorder.append("restore_conflict", run_id=record.run_id, tool_call_id=record.tool_call_id, **conflict)
+            continue
         actions.append(action)
         if dry_run:
             recorder.append("restore_preview", run_id=record.run_id, tool_call_id=record.tool_call_id, **action)
@@ -150,42 +235,60 @@ def restore_run(run_dir: Path, only_file: str | None = None, dry_run: bool = Fal
     return actions
 
 
-def _backup_records_from_verified_trace(run_dir: Path) -> list[BackupRecord]:
-    trace_path = run_dir / "trace.jsonl"
-    events = read_trace(trace_path)
-    verification = verify_events(events)
-    if verification["valid"] is not True:
-        raise ValueError(f"cannot restore from invalid evidence: {verification.get('reason', 'unknown')}")
-    records: list[BackupRecord] = []
+def _recovery_checkpoints_from_verified_trace(run_dir: Path) -> list[WriteRecoveryCheckpoint]:
+    events = read_verified_events(run_dir)
+    successful_results: dict[str, str] = {}
     for event in events:
-        if event.get("event_type") != "backup_created":
+        if event.get("event_type") != "tool_result" or event.get("status") != "ok":
             continue
-        record = _backup_record_from_evidence(event)
+        tool_call_id = _required_text(event, "tool_call_id")
+        output_digest = _required_text(event, "output_digest")
+        successful_results[tool_call_id] = output_digest
+
+    records: list[WriteRecoveryCheckpoint] = []
+    for event in events:
+        if event.get("event_type") != "write_recovery_checkpoint":
+            continue
+        record = _recovery_checkpoint_from_evidence(event)
         if record.run_id != run_dir.name:
-            raise ValueError("backup evidence run_id does not match run directory")
+            raise ValueError("recovery checkpoint run_id does not match run directory")
+        if successful_results.get(record.tool_call_id) != record.result_output_digest:
+            raise ValueError("recovery checkpoint is not bound to a successful tool result")
         records.append(record)
     return records
 
 
-def _backup_record_from_evidence(event: Mapping[str, object]) -> BackupRecord:
+def _recovery_checkpoint_from_evidence(event: Mapping[str, object]) -> WriteRecoveryCheckpoint:
     existed = event.get("existed")
     if not isinstance(existed, bool):
-        raise ValueError("backup evidence requires a boolean existed value")
+        raise ValueError("recovery checkpoint requires a boolean existed value")
     backup_path = _optional_text(event, "backup_path")
     backup_sha256 = _optional_text(event, "backup_sha256")
     if existed and (backup_path is None or backup_sha256 is None):
-        raise ValueError("existing backup evidence requires a path and sha256 digest")
+        raise ValueError("existing recovery checkpoint requires a path and sha256 digest")
     if not existed and (backup_path is not None or backup_sha256 is not None):
-        raise ValueError("new-file backup evidence must not include backup content")
-    return BackupRecord(
+        raise ValueError("new-file recovery checkpoint must not include backup content")
+    post_write_sha256 = _required_text(event, "post_write_sha256")
+    result_output_digest = _required_text(event, "result_output_digest")
+    if post_write_sha256 != result_output_digest:
+        raise ValueError("recovery checkpoint post-write digest must match tool result digest")
+    return WriteRecoveryCheckpoint(
         run_id=_required_text(event, "run_id"),
         tool_call_id=_required_text(event, "tool_call_id"),
         path=_required_text(event, "path"),
         existed=existed,
         backup_path=backup_path,
         backup_sha256=backup_sha256,
+        post_write_sha256=post_write_sha256,
+        result_output_digest=result_output_digest,
         created_at=_required_text(event, "created_at"),
     )
+
+
+def _post_write_state_changed(target: Path, expected_sha256: str) -> bool:
+    if not target.is_file():
+        return True
+    return _sha256(target.read_bytes()) != expected_sha256
 
 
 def _project_root_from_run_dir(run_dir: Path) -> Path:

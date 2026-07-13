@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
-from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_events
+from agenttrust.adapters.evidence.jsonl_store import read_verified_events
 from agenttrust.adapters.verification.mapper import Fact
 from agenttrust.domain.approvals import ApprovalRequest
 from agenttrust.domain.lifecycle import SessionStatus, ToolCallStatus
@@ -34,11 +34,7 @@ def replay_verified_run(run_dir: Path) -> ReplayedRunState:
     """Verify a run's hash chain, then rebuild its session state from its events."""
 
     run_dir = run_dir.resolve()
-    trace_path = run_dir / "trace.jsonl"
-    events = read_trace(trace_path)
-    verification = verify_events(events)
-    if verification["valid"] is not True:
-        raise ValueError(f"invalid evidence trace: {verification.get('reason', 'unknown')}")
+    events = read_verified_events(run_dir)
     return replay_events(events, expected_run_id=run_dir.name)
 
 
@@ -220,6 +216,7 @@ def _approval_from_event(event: Mapping[str, Any]) -> ApprovalRequest:
         tool_call_id=_required_text(event, "tool_call_id"),
         tool_name=_required_text(event, "tool_name"),
         arguments_digest=_required_text(event, "arguments_digest"),
+        arguments_preview=_approval_arguments(event),
         policy_rule_id=_optional_text(event, "policy_rule_id"),
         reason=_required_text(event, "reason"),
         requested_at=_required_text(event, "requested_at"),
@@ -233,6 +230,7 @@ def _apply_approval_event(approval: ApprovalRequest, event: Mapping[str, Any]) -
     _require_equal("approval tool_call_id", approval.tool_call_id, _required_text(event, "tool_call_id"))
     _require_equal("approval tool_name", approval.tool_name, _required_text(event, "tool_name"))
     _require_equal("approval arguments_digest", approval.arguments_digest, _required_text(event, "arguments_digest"))
+    _require_equal("approval arguments", approval.arguments_preview, _approval_arguments(event))
     _require_equal("approval policy_rule_id", approval.policy_rule_id, _optional_text(event, "policy_rule_id"))
     _require_equal("approval reason", approval.reason, _required_text(event, "reason"))
     _require_equal("approval requested_at", approval.requested_at, _required_text(event, "requested_at"))
@@ -262,6 +260,8 @@ def _fact_from_event(raw: object) -> Fact:
         unit=unit,
         source_tool_call_id=_required_text(raw, "source_tool_call_id"),
         source_tool_name=_required_text(raw, "source_tool_name"),
+        provenance=_optional_text(raw, "provenance") or "real",
+        trust_level=_optional_text(raw, "trust_level") or "trusted",
     )
 
 
@@ -279,6 +279,13 @@ def _optional_text(event: Mapping[str, Any], key: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"evidence event requires {key} to be a non-empty string or null")
     return value
+
+
+def _approval_arguments(event: Mapping[str, Any]) -> dict[str, object]:
+    value = event.get("arguments", {})
+    if not isinstance(value, Mapping) or not all(isinstance(key, str) for key in value):
+        raise ValueError("approval arguments must be a string-keyed object")
+    return dict(cast(Mapping[str, object], value))
 
 
 def _require_equal(label: str, expected: object, actual: object) -> None:

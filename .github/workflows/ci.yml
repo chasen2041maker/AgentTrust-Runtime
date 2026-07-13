@@ -46,14 +46,35 @@ jobs:
           .smoke-venv/bin/agenttrust --help
           .smoke-venv/bin/python -c "from agenttrust.interfaces.python_api import AgentTrustRuntime; print(AgentTrustRuntime)"
 
-  optional-otel:
+  optional-extras:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - extra: groundguard
+            import_module: groundguard
+            tests: tests/test_groundguard_adapter.py
+          - extra: otel
+            import_module: opentelemetry.sdk
+            tests: tests/test_otel_export.py
+          - extra: openai
+            import_module: agents
+            tests: tests/test_integrations.py
+          - extra: langgraph
+            import_module: langgraph
+            tests: tests/test_integrations.py
+          - extra: pydantic-ai
+            import_module: pydantic_ai
+            tests: tests/test_integrations.py
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install OpenTelemetry extra
-        run: python -m pip install -e ".[test,otel]"
-      - name: Test evidence export
-        run: pytest tests/test_otel_export.py
+      - name: Install optional extra
+        run: python -m pip install -e ".[test,${{ matrix.extra }}]"
+      - name: Verify installed package
+        run: python -c "import ${{ matrix.import_module }}"
+      - name: Run adapter smoke tests
+        run: pytest ${{ matrix.tests }}

@@ -39,11 +39,36 @@ class CoverageReport:
         }
 
 
-def verify_answer(answer: str, facts: list[Fact], required_fact_keys: list[str]) -> CoverageReport:
-    groundguard_report = _try_groundguard(answer, facts, required_fact_keys)
+def verify_answer(
+    answer: str,
+    facts: list[Fact],
+    required_fact_keys: list[str],
+    *,
+    allow_simulated_facts: bool = False,
+    verification_mode: str = "fallback",
+) -> CoverageReport:
+    if verification_mode not in {"fallback", "groundguard_required"}:
+        raise ValueError(f"invalid verification mode: {verification_mode}")
+    eligible_facts = facts if allow_simulated_facts else [fact for fact in facts if fact.trust_level == "trusted"]
+    groundguard_report = _try_groundguard(answer, eligible_facts, required_fact_keys)
     if groundguard_report is not None:
         return groundguard_report
-    return _fallback_verify_answer(answer, facts, required_fact_keys)
+    if verification_mode == "groundguard_required":
+        return CoverageReport(
+            status="unverified",
+            engine="groundguard-required",
+            required_fact_keys=tuple(required_fact_keys),
+            unverified_keys=tuple(required_fact_keys),
+            details=tuple(
+                {
+                    "key": key,
+                    "status": "unverified",
+                    "reason": "GroundGuard verification was unavailable or invalid",
+                }
+                for key in required_fact_keys
+            ),
+        )
+    return _fallback_verify_answer(answer, eligible_facts, required_fact_keys)
 
 
 def _try_groundguard(answer: str, facts: list[Fact], required_fact_keys: list[str]) -> CoverageReport | None:

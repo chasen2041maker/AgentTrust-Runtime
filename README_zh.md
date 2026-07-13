@@ -33,7 +33,7 @@
 
 ![AgentTrust Runtime 控制流程](docs/assets/runtime-flow.svg)
 
-> **v0.5.1 Beta / 开发者预览**：适合本地开发、集成验证和确定性控制回归。它不是生产安全保证；连接真实系统前仍需完成权限审查、独立威胁建模和环境级防护。
+> **v0.5.2 Beta / 开发者预览**：适合本地开发、集成验证和确定性控制回归。它不是生产安全保证；连接真实系统前仍需完成权限审查、独立威胁建模和环境级防护。
 
 ## AgentTrust 是什么？
 
@@ -94,7 +94,7 @@ from pathlib import Path
 
 from agenttrust import AgentTrustRuntime
 
-runtime = AgentTrustRuntime(Path("."), runtime_mode="interactive")
+runtime = AgentTrustRuntime(Path("."), runtime_mode="interactive", approval_mode="deferred")
 
 with runtime.session(actor_id="alice", agent_id="coding-agent") as session:
     outcome = session.execute(
@@ -185,7 +185,7 @@ agenttrust mcp trust <server> --tool read_file
 - `discover` 和 `inspect` 不启动 server，也不输出环境变量值。
 - 真实调用需要 server consent 和 tool-level trust。
 - command、description 或 input schema 漂移会使 trust 失效，后续调用被阻断。
-- 非 test 模式下缺失配置会失败；只有显式 `simulated` 时才模拟成功。
+- 模拟调用只在 test 模式或运行时显式开启模拟能力时允许；其事实会标为 `test_only`，不能用于验证普通模式的最终答案。
 - 当前 sandbox profile 是策略元数据，**不是**操作系统级进程或网络隔离。
 
 ## Evidence、恢复与报告
@@ -194,13 +194,14 @@ agenttrust mcp trust <server> --tool read_file
 
 Evidence 事件是带前序事件 hash 的 append-oriented JSONL 记录。`agenttrust evidence verify` 会在 replay、restore 或 OpenTelemetry 导出前验证 trace；`agenttrust state rebuild` 可从已验证 trace 重建本地 SQLite 投影。
 
-对受控的 `write_file`，运行时会保存 run-local backup，并校验恢复路径与 backup digest。恢复面向文件，应当经过审查；它不是任意副作用的事务或通用回滚系统。
+对受控的 `write_file`，运行时只会在写入成功后记录恢复点，并绑定实际写后 digest。恢复默认只预览；目标文件在运行后被修改时会跳过，除非显式使用 `--force`。
 
 ```powershell
 agenttrust evidence verify <run_id>
 agenttrust evidence export <run_id>
 agenttrust state rebuild
-agenttrust restore <run_id> --dry-run
+agenttrust restore <run_id>
+agenttrust restore <run_id> --apply
 agenttrust report <run_id> --format html
 ```
 
@@ -209,6 +210,8 @@ agenttrust report <run_id> --format html
 ## 最终答案核验
 
 `finalize_answer()` 会记录最终答案，并把要求的 fact key 与当前会话产出的 facts 对照。这在工具结果与答案声明之间提供可检查的关联，但不证明任意模型输出的完整性或真实性。
+
+可在策略中设置 `verification.mode: groundguard_required`，让缺失或无效的 GroundGuard 输出明确成为未验证结果。默认 `fallback` 模式保留适用于本地开发的内置确定性核验器。
 
 ```python
 result = session.finalize_answer(
@@ -261,15 +264,15 @@ JSON 报告包含 case ID、预期与实际结果、类别计数和 policy laten
 已知限制：
 
 - 本地 evidence 没有外部签名、可信时间戳或不可变存储锚点。
-- 会话串行化只在进程内生效；不要从多个进程恢复同一个 run。
+- 同一 run 的 evidence 和状态转换使用跨平台运行锁；外部签名和不可变存储仍不属于本地运行时的边界。
 - `govern()` 包装的自定义函数需要在重启后再次注册，才能恢复执行。
-- 当审批记录有 expiry 时会强制执行，但尚无可配置的默认审批 TTL。
+- 审批请求默认 TTL 为一小时，可通过 `approvals.default_ttl_seconds` 或 session override 配置。
 - MCP sandbox profile 尚未实现 OS 级进程或网络隔离。
 - 文件恢复不是通用事务或回滚机制。
 
 ## 路线图
 
-下一阶段会聚焦跨进程 run 协调、可配置审批时限、更强的 evidence anchoring、成功写入后的恢复绑定，以及 OS 级 MCP 隔离。完整的实施历史和计划边界见[重构路线图](docs/refactor-roadmap.md)与[企业架构方案](docs/enterprise-architecture.md)。
+下一阶段会聚焦更强的 evidence anchoring、OS 级 MCP 隔离，以及更广泛的 policy pack 互操作性。完整的实施历史和计划边界见[重构路线图](docs/refactor-roadmap.md)与[企业架构方案](docs/enterprise-architecture.md)。
 
 ## 文档
 

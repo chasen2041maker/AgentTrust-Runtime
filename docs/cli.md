@@ -11,7 +11,7 @@ agenttrust run-fixture verified_answer --mode test
 agenttrust run-live fake_tool_request --mode interactive
 ```
 
-`run-fixture` 提供可重复的权限、沙箱、事实、恢复、MCP 和上下文测试路径。模式为 `interactive`、`noninteractive` 或 `test`；只有 `test` 使用 mock approver。
+`run-fixture` 提供可重复的权限、沙箱、事实、恢复、MCP 和上下文测试路径。`runtime_mode`（`interactive`、`noninteractive` 或 `test`）与审批模式分离：SDK 默认 `deferred`，只有显式 `inline_prompt` 才会读取交互输入；`mock` 只允许 test 模式。
 
 ## Run 与证据
 
@@ -38,11 +38,11 @@ agenttrust approvals approve <approval_id> --reason "reviewed" [--approver alice
 agenttrust approvals deny <approval_id> --reason "unsafe"
 agenttrust run resume <run_id>
 agenttrust run cancel <run_id>
-agenttrust restore <run_id> [--file path] [--dry-run]
+agenttrust restore <run_id> [--file path] [--apply] [--force]
 agenttrust policy validate .agenttrust/policy.yaml
 ```
 
-审批决定写回 evidence 与 SQLite，且绑定原始 `arguments_digest`。`resume` 拒绝无效证据、缺失策略快照、未决审批或摘要不匹配的 run。
+审批决定写回 evidence 与 SQLite，并绑定原始 `arguments_digest`。`approvals inspect` 仅显示脱敏参数视图；默认审批 TTL 为一小时，可由策略或 session 覆盖。`resume` 拒绝无效证据、缺失策略快照、未决审批或摘要不匹配的 run。
 
 ## 工具与本地上下文
 

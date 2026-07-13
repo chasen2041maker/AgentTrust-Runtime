@@ -12,6 +12,7 @@ from agenttrust.domain.models import ToolIntent
 
 VALID_EFFECTS = frozenset({"allow", "ask", "deny"})
 VALID_FINAL_ANSWER_MODES = frozenset({"warn", "deny_completion", "require_revision"})
+VALID_VERIFICATION_MODES = frozenset({"fallback", "groundguard_required"})
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,8 @@ class Policy:
     rules: tuple[PolicyRule, ...] = field(default_factory=tuple)
     hooks: tuple[HookRule, ...] = field(default_factory=tuple)
     final_answer_mode: str = "warn"
+    verification_mode: str = "fallback"
+    approval_ttl_seconds: int = 3600
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Policy":
@@ -162,6 +165,22 @@ class Policy:
         final_answer_mode = str(final_answer.get("on_incomplete", "warn"))
         if final_answer_mode not in VALID_FINAL_ANSWER_MODES:
             raise ValueError(f"invalid final_answer on_incomplete mode: {final_answer_mode}")
+        verification = raw.get("verification", {}) or {}
+        if not isinstance(verification, dict):
+            raise ValueError("verification policy must contain a mapping")
+        verification_mode = str(verification.get("mode", "fallback"))
+        if verification_mode not in VALID_VERIFICATION_MODES:
+            raise ValueError(f"invalid verification mode: {verification_mode}")
+        approvals = raw.get("approvals", {}) or {}
+        if not isinstance(approvals, dict):
+            raise ValueError("approvals policy must contain a mapping")
+        approval_ttl_seconds = approvals.get("default_ttl_seconds", 3600)
+        if (
+            isinstance(approval_ttl_seconds, bool)
+            or not isinstance(approval_ttl_seconds, int)
+            or approval_ttl_seconds <= 0
+        ):
+            raise ValueError("approvals.default_ttl_seconds must be a positive integer")
         return cls(
             project_root=str(raw.get("project_root", ".")),
             mode=str(raw.get("mode", "default")),
@@ -171,4 +190,6 @@ class Policy:
                 for hook in ((raw.get("hooks", {}) or {}).get("pre_tool", ()) or ())
             ),
             final_answer_mode=final_answer_mode,
+            verification_mode=verification_mode,
+            approval_ttl_seconds=approval_ttl_seconds,
         )

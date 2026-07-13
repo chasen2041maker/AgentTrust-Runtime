@@ -24,7 +24,9 @@ class PermissionEngine:
         self._tool_specs[spec.name] = spec
 
     def decide(self, intent: ToolIntent) -> PermissionDecision:
+        default_decision = self._default_tool_decision(intent)
         ask_match: PermissionDecision | None = None
+        allow_match: PermissionDecision | None = None
         for rule in self.policy.rules:
             if not rule.matches(intent):
                 continue
@@ -40,9 +42,15 @@ class PermissionEngine:
                 return decision
             if rule.effect == "ask" and ask_match is None:
                 ask_match = decision
+            if rule.effect == "allow" and allow_match is None:
+                allow_match = decision
+        if default_decision is not None and default_decision.effect == "deny":
+            # Registry denials are hard boundaries: policy may tighten them, never elevate them.
+            return default_decision
         if ask_match is not None:
             return ask_match
-        default_decision = self._default_tool_decision(intent)
+        if allow_match is not None:
+            return allow_match
         if default_decision is not None:
             return default_decision
         return PermissionDecision(

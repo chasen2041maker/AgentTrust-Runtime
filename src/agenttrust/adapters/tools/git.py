@@ -34,6 +34,15 @@ def _diff_stats(diff_text: str) -> dict[str, int]:
 def git_diff(intent: ToolIntent, project_root: Path) -> ToolResult:
     simulated_diff = intent.arguments.get("simulated_diff")
     if isinstance(simulated_diff, str):
+        if not _simulation_allowed(intent):
+            return ToolResult(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                status="error",
+                error="simulated git diff is only available in test mode or when explicitly enabled by the runtime",
+                metadata={"simulation_denied": True},
+            )
         return ToolResult(
             run_id=intent.run_id,
             tool_call_id=intent.tool_call_id,
@@ -93,3 +102,7 @@ def git_diff(intent: ToolIntent, project_root: Path) -> ToolResult:
         output_digest=_digest_text(output),
         metadata=metadata,
     )
+
+
+def _simulation_allowed(intent: ToolIntent) -> bool:
+    return intent.runtime_mode == "test" or intent.simulation_allowed

@@ -228,3 +228,4 @@ def test_cancel_records_and_replays_an_expired_approval_denial(tmp_path: Path) -
     assert cancelled.status == "cancelled"
     assert replayed.session.status == "cancelled"
     assert replayed.approvals[0].decision_reason == "approval_expired"
+    assert any(event.get("event_type") == "approval_expired" for event in read_trace(trace_path))

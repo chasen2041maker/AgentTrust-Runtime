@@ -10,27 +10,28 @@
 
 ## Policy、PermissionDecision 与 FinalPermission
 
-策略规则首先给出 `allow`、`ask`、`deny` 的 `PermissionDecision`。运行模式再把它变为可执行 `FinalPermission`：
+策略规则首先给出 `allow`、`ask`、`deny` 的 `PermissionDecision`。`deny > ask > allow > 工具默认值`，但未注册工具和注册表硬拒绝不能被 `allow` 升权。运行时模式与审批模式共同把它变为可执行 `FinalPermission`：
 
 | 模式 | `ask` 的最终结果 |
 | --- | --- |
-| `interactive` | 暂停为 `waiting_approval`，等待批准或拒绝。 |
-| `noninteractive` | `deny`，reason 为 `approval_required`。 |
-| `test` | 确定性 mock approver 放行，便于测试。 |
+| `deferred` | 暂停为 `waiting_approval`，持久化后等待批准或拒绝。 |
+| `inline_prompt` | 显式在当前终端询问批准或拒绝。 |
+| `deny` | 拒绝，reason 为 `approval_required`。 |
+| `mock` | 仅 test 模式使用的确定性 mock approver。 |
 
 没有匹配规则时，Tool Registry 的默认 effect 作为安全回退；没有注册的工具直接拒绝。
 
 ## ApprovalRequest
 
-审批请求记录 `approval_id`、run/tool call、工具、`arguments_digest`、命中规则、原因、时间、决定与 approver。它可以在进程重启后由 `agenttrust approvals` 决定，随后使用 `agenttrust run resume` 恢复同一调用。
+审批请求记录 `approval_id`、run/tool call、工具、`arguments_digest`、脱敏参数视图、命中规则、原因、TTL、时间、决定与 approver。它可以在进程重启后由 `agenttrust approvals` 决定，随后使用 `agenttrust run resume` 恢复同一调用。
 
 ## Evidence 与 SQLite 投影
 
-`trace.jsonl` 是 append-only、hash-linked evidence。`state.db` 仅提供可查询的 session、tool call 和 approval 投影。`agenttrust evidence verify` 验证链，`agenttrust state rebuild` 从有效 evidence 重新生成投影。
+`trace.jsonl` 是 append-only、hash-linked evidence。每次追加都会在跨平台 run lock 内重新验证当前头部；`state.db` 仅提供可查询的 session、tool call 和 approval 投影。`agenttrust evidence verify` 验证链，`agenttrust state rebuild` 从有效 evidence 重新生成投影。
 
 ## Facts 与 FinalAnswerResult
 
-工具成功后，显式 `AGENTTRUST_FACTS` block 与可靠 metadata 可映射为 `Fact`。`session.finalize_answer()` 只使用当前 session 的 facts 调用 GroundGuard，产生 `FinalAnswerResult` 和 `groundguard-report.json`。策略可在事实不完整时警告、拒绝完成或要求修订。
+工具成功后，显式 `AGENTTRUST_FACTS` block 与可靠 metadata 可映射为 `Fact`，并保留 `real`/`simulated` 来源与 `trusted`/`test_only` 信任状态。普通最终答案只能使用 `trusted` facts。`verification.mode: groundguard_required` 不会在 GroundGuard 缺失或无效时静默降级；策略也可在事实不完整时警告、拒绝完成或要求修订。
 
 ## MCP 信任面
 

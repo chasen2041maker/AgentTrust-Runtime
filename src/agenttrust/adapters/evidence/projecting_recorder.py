@@ -27,10 +27,10 @@ class ProjectingTraceRecorder:
         event = self._recorder.append(event_type, **payload)
         try:
             self._projection.apply_event(event)
-        except (sqlite3.Error, ValueError):
+        except sqlite3.Error:
             # SQLite is a disposable cache; rebuild it from authoritative JSONL.
             try:
                 self._projection.rebuild()
-            except (OSError, sqlite3.Error, ValueError):
+            except (OSError, sqlite3.Error):
                 pass
         return event

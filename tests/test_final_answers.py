@@ -90,6 +90,65 @@ def test_final_answer_cannot_use_facts_from_a_different_session(tmp_path: Path) 
     assert result.status == "unverified"
 
 
+def test_simulated_facts_are_test_only_and_cannot_verify_a_normal_session(tmp_path: Path) -> None:
+    agenttrust_dir = tmp_path / ".agenttrust"
+    agenttrust_dir.mkdir()
+    (agenttrust_dir / "policy.yaml").write_text(
+        """project_root: .
+rules:
+  - id: allow-shell-for-test-harness
+    tool: shell
+    effect: allow
+    reason: explicit harness policy
+""",
+        encoding="utf-8",
+    )
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="interactive", allow_simulation=True)
+
+    with runtime.session(actor_id="alice") as session:
+        tool_run = session.execute(
+            "shell",
+            {"simulated_output": "AGENTTRUST_FACTS:\nrevenue=42 USD\nEND_AGENTTRUST_FACTS\n"},
+        )
+        result = session.finalize_answer("Revenue was 42 [fact:revenue].", required_fact_keys=["revenue"])
+
+    assert tool_run.outcome.result is not None
+    assert tool_run.outcome.facts[0].provenance == "simulated"
+    assert tool_run.outcome.facts[0].trust_level == "test_only"
+    assert result.status == "unverified"
+
+
+def test_policy_can_require_groundguard_for_completion(tmp_path: Path, monkeypatch) -> None:
+    import agenttrust.adapters.verification.verifier as verifier
+
+    monkeypatch.setattr(verifier, "FactGate", None)
+    monkeypatch.setattr(verifier, "report_to_versioned_dict", None)
+    agenttrust_dir = tmp_path / ".agenttrust"
+    agenttrust_dir.mkdir()
+    (agenttrust_dir / "policy.yaml").write_text(
+        """project_root: .
+verification:
+  mode: groundguard_required
+final_answer:
+  on_incomplete: deny_completion
+rules: []
+""",
+        encoding="utf-8",
+    )
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="test")
+
+    with runtime.session(actor_id="alice") as session:
+        session.execute(
+            "shell",
+            {"simulated_output": "AGENTTRUST_FACTS:\nrevenue=42 USD\nEND_AGENTTRUST_FACTS\n"},
+        )
+        result = session.finalize_answer("Revenue was 42 [fact:revenue].", required_fact_keys=["revenue"])
+
+    assert result.status == "unverified"
+    assert result.completed is False
+    assert result.completion_action == "completion_denied"
+
+
 def test_resumed_session_uses_its_persisted_fact_ledger_for_final_answer(tmp_path: Path, capsys) -> None:
     (tmp_path / "README.md").write_text("one line\n", encoding="utf-8")
     runtime = AgentTrustRuntime(tmp_path, runtime_mode="noninteractive")

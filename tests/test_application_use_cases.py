@@ -207,8 +207,14 @@ class InMemoryContextPacks:
 
 
 class InMemoryRecovery:
-    def restore(self, run_dir: Path, only_file: str | None = None, dry_run: bool = False) -> list[dict[str, object]]:
-        return [{"run_dir": str(run_dir), "only_file": only_file, "dry_run": dry_run}]
+    def restore(
+        self,
+        run_dir: Path,
+        only_file: str | None = None,
+        dry_run: bool = True,
+        force: bool = False,
+    ) -> list[dict[str, object]]:
+        return [{"run_dir": str(run_dir), "only_file": only_file, "dry_run": dry_run, "force": force}]
 
 
 def test_context_and_restore_use_cases_delegate_to_ports(tmp_path: Path) -> None:
@@ -218,5 +224,5 @@ def test_context_and_restore_use_cases_delegate_to_ports(tmp_path: Path) -> None
     assert context.build(tmp_path, skill="review", budget=512)[0].name == "review-512.md"
     assert context.export_to_run(tmp_path, "run_123")[0].parent.name == "run_123"
     assert recovery.execute(tmp_path / "run_123", only_file="README.md", dry_run=True) == [
-        {"run_dir": str(tmp_path / "run_123"), "only_file": "README.md", "dry_run": True}
+        {"run_dir": str(tmp_path / "run_123"), "only_file": "README.md", "dry_run": True, "force": False}
     ]

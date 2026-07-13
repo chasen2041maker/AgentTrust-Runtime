@@ -25,6 +25,7 @@ class ToolIntent:
     source: str
     created_at: str = field(default_factory=utc_now_iso)
     runtime_mode: str = "interactive"
+    simulation_allowed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -35,6 +36,7 @@ class ToolIntent:
             "source": self.source,
             "created_at": self.created_at,
             "runtime_mode": self.runtime_mode,
+            "simulation_allowed": self.simulation_allowed,
         }
 
 

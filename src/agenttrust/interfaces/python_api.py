@@ -13,7 +13,8 @@ from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
 from agenttrust.adapters.evidence.projecting_recorder import ProjectingTraceRecorder
 from agenttrust.adapters.evidence.replay import replay_verified_run
-from agenttrust.adapters.evidence.recovery import create_backup_for_write
+from agenttrust.adapters.evidence.recovery import bind_successful_write, create_backup_for_write
+from agenttrust.adapters.evidence.run_lock import RunLock
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
 from agenttrust.adapters.policy.yaml_policy import load_policy, policy_digest, snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
@@ -27,8 +28,15 @@ from agenttrust.domain.models import ToolIntent
 from agenttrust.domain.policy import Policy
 from agenttrust.domain.sessions import AgentSession, SessionToolCall
 from agenttrust.groundguard_adapter import CoverageReport, verify_answer, write_coverage_report
-from agenttrust.permissions import PermissionEngine, evaluate_pre_tool_hooks, finalize_permission, request_interactive_approval
+from agenttrust.permissions import (
+    PermissionEngine,
+    approval_mode_for_runtime,
+    evaluate_pre_tool_hooks,
+    finalize_permission,
+    request_interactive_approval,
+)
 from agenttrust.runtime.fixtures import create_run_id
+from agenttrust.runtime.report import resolve_run_dir
 from agenttrust.tools.registry import ToolSpec
 
 
@@ -67,6 +75,8 @@ class AgentTrustSession:
         timeout_seconds: float | None = None,
         permission_engine: PermissionEngine | None = None,
         tool_gateway: ToolGateway | None = None,
+        run_lock: RunLock | None = None,
+        verification_mode: str = "fallback",
     ) -> None:
         self._governed_session = governed_session
         self._evidence = evidence
@@ -78,6 +88,8 @@ class AgentTrustSession:
         self._deadline = monotonic() + timeout_seconds if timeout_seconds is not None else None
         self._permission_engine = permission_engine
         self._tool_gateway = tool_gateway
+        self._run_lock = run_lock
+        self._verification_mode = verification_mode
         self._entered = False
 
     @property
@@ -114,16 +126,21 @@ class AgentTrustSession:
         return self
 
     def __exit__(self, exception_type, exception, traceback) -> None:
-        if exception is not None:
-            if self._governed_session.session.status != "waiting_approval":
-                self._governed_session.fail()
-        elif self._has_timed_out():
-            self._governed_session.timeout()
-        else:
-            self._governed_session.close()
-        session = self._governed_session.session
-        if session.is_terminal:
-            self._evidence.append("run_completed", run_id=session.run_id, status=session.status)
+        try:
+            if exception is not None:
+                if self._governed_session.session.status != "waiting_approval":
+                    self._governed_session.fail()
+            elif self._has_timed_out():
+                self._governed_session.timeout()
+            else:
+                self._governed_session.close()
+            session = self._governed_session.session
+            if session.is_terminal:
+                self._evidence.append("run_completed", run_id=session.run_id, status=session.status)
+        finally:
+            if self._run_lock is not None:
+                self._run_lock.release()
+                self._run_lock = None
 
     def execute(
         self,
@@ -158,7 +175,13 @@ class AgentTrustSession:
             raise RuntimeError("final answers must be submitted inside the context manager")
         self._raise_if_timed_out()
         facts = [fact for fact in self._governed_session.facts if isinstance(fact, Fact)]
-        report = verify_answer(answer, facts, list(required_fact_keys))
+        report = verify_answer(
+            answer,
+            facts,
+            list(required_fact_keys),
+            allow_simulated_facts=self._runtime_mode == "test",
+            verification_mode=self._verification_mode,
+        )
         (self.run_dir / "final-answer.md").write_text(answer, encoding="utf-8")
         write_coverage_report(self.run_dir / "groundguard-report.json", report)
         outcome = self._governed_session.record_final_answer(answer, report.status, report.to_dict())
@@ -186,9 +209,17 @@ class AgentTrustSession:
 class AgentTrustRuntime:
     """Embed governed local tool execution inside a custom agent framework."""
 
-    def __init__(self, project_root: Path, runtime_mode: str = "interactive") -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        runtime_mode: str = "interactive",
+        approval_mode: str | None = None,
+        allow_simulation: bool = False,
+    ) -> None:
         self.project_root = project_root.resolve()
         self.runtime_mode = runtime_mode
+        self.approval_mode = approval_mode_for_runtime(runtime_mode, approval_mode)
+        self.allow_simulation = allow_simulation
 
     def session(
         self,
@@ -197,11 +228,19 @@ class AgentTrustRuntime:
         agent_id: str | None = None,
         session_id: str | None = None,
         timeout_seconds: float | None = None,
+        approval_ttl_seconds: int | None = None,
+        approval_mode: str | None = None,
     ) -> AgentTrustSession:
         if timeout_seconds is not None and timeout_seconds < 0:
             raise ValueError("timeout_seconds must be zero or greater")
+        if approval_ttl_seconds is not None and (
+            isinstance(approval_ttl_seconds, bool)
+            or not isinstance(approval_ttl_seconds, int)
+            or approval_ttl_seconds <= 0
+        ):
+            raise ValueError("approval_ttl_seconds must be a positive integer")
         run_id = create_run_id()
-        run_dir = self.project_root / ".agenttrust" / "runs" / run_id
+        run_dir = resolve_run_dir(self.project_root, run_id)
         recorder = TraceRecorder(run_dir)
         policy_path = self.project_root / ".agenttrust" / "policy.yaml"
         policy = load_policy(policy_path)
@@ -215,8 +254,11 @@ class AgentTrustRuntime:
             session_id=resolved_session_id,
             policy_version=policy_version,
         )
-        evidence = ProjectingTraceRecorder(recorder, SQLiteStateProjection(self.project_root))
+        projection = SQLiteStateProjection(self.project_root)
+        projection.rebuild()
+        evidence = ProjectingTraceRecorder(recorder, projection)
         tool_runner, permission_engine, tool_gateway = self._build_tool_runner(policy, evidence)
+        resolved_approval_mode = approval_mode_for_runtime(self.runtime_mode, approval_mode or self.approval_mode)
         governed_session = GovernedSession(
             session=AgentSession.create(
                 run_id=run_id,
@@ -231,8 +273,12 @@ class AgentTrustRuntime:
             run_dir=run_dir,
             runtime_mode=self.runtime_mode,
             hooks=policy.hooks,
+            approval_mode=resolved_approval_mode,
+            simulation_allowed=self.allow_simulation,
             approval_journal=JsonlApprovalJournal(run_dir),
-            defer_approvals=self.runtime_mode != "test",
+            approval_ttl_seconds=(
+                approval_ttl_seconds if approval_ttl_seconds is not None else policy.approval_ttl_seconds
+            ),
             final_answer_mode=policy.final_answer_mode,
         )
         evidence.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
@@ -243,6 +289,7 @@ class AgentTrustRuntime:
             timeout_seconds=timeout_seconds,
             permission_engine=permission_engine,
             tool_gateway=tool_gateway,
+            verification_mode=policy.verification_mode,
         )
 
     def resume(
@@ -251,11 +298,29 @@ class AgentTrustRuntime:
         timeout_seconds: float | None = None,
         resume_tools: Sequence[object] = (),
     ) -> AgentTrustSession:
-        """Resume a decided request, optionally re-registering custom governed tools."""
+        """Resume a decided request while holding its run lock until the context exits."""
 
         if timeout_seconds is not None and timeout_seconds < 0:
             raise ValueError("timeout_seconds must be zero or greater")
-        run_dir = self.project_root / ".agenttrust" / "runs" / run_id
+        run_dir = resolve_run_dir(self.project_root, run_id)
+        operation_lock = RunLock(run_dir)
+        operation_lock.acquire()
+        try:
+            return self._resume_locked(run_id, timeout_seconds, resume_tools, operation_lock)
+        except Exception:
+            operation_lock.release()
+            raise
+
+    def _resume_locked(
+        self,
+        run_id: str,
+        timeout_seconds: float | None,
+        resume_tools: Sequence[object],
+        operation_lock: RunLock,
+    ) -> AgentTrustSession:
+        """Resume a decided request, optionally re-registering custom governed tools."""
+
+        run_dir = resolve_run_dir(self.project_root, run_id)
         replayed = replay_verified_run(run_dir)
         session = replayed.session
         if session.status != "waiting_approval":
@@ -281,14 +346,16 @@ class AgentTrustRuntime:
         for resume_tool in resume_tools:
             if not callable(getattr(resume_tool, "register", None)):
                 raise ValueError("resume tools must provide a callable register(session) attribute")
-        recorder = TraceRecorder(run_dir)
+        recorder = TraceRecorder(run_dir, run_lock=operation_lock)
         recorder.bind(
             actor_id=session.actor_id,
             agent_id=session.agent_id,
             session_id=session.session_id,
             policy_version=session.policy_version,
         )
-        evidence = ProjectingTraceRecorder(recorder, SQLiteStateProjection(self.project_root))
+        projection = SQLiteStateProjection(self.project_root)
+        projection.rebuild()
+        evidence = ProjectingTraceRecorder(recorder, projection)
         evidence.append(
             "run_resumed",
             run_id=run_id,
@@ -305,7 +372,10 @@ class AgentTrustRuntime:
             run_dir=run_dir,
             runtime_mode=self.runtime_mode,
             hooks=policy.hooks,
+            approval_mode=self.approval_mode,
+            simulation_allowed=self.allow_simulation,
             approval_journal=JsonlApprovalJournal(run_dir),
+            approval_ttl_seconds=policy.approval_ttl_seconds,
             initial_sequence=max((call.sequence for call in replayed.tool_calls), default=0),
             started=True,
             initial_facts=replayed.facts,
@@ -322,6 +392,8 @@ class AgentTrustRuntime:
             timeout_seconds=timeout_seconds,
             permission_engine=permission_engine,
             tool_gateway=tool_gateway,
+            run_lock=operation_lock,
+            verification_mode=policy.verification_mode,
         )
         for resume_tool in resume_tools:
             register = getattr(resume_tool, "register", None)
@@ -330,27 +402,43 @@ class AgentTrustRuntime:
         return restored_session
 
     def cancel(self, run_id: str, actor_id: str | None = None) -> AgentSession:
-        run_dir = self.project_root / ".agenttrust" / "runs" / run_id
+        run_dir = resolve_run_dir(self.project_root, run_id)
+        with RunLock(run_dir) as operation_lock:
+            return self._cancel_locked(run_id, actor_id, operation_lock)
+
+    def _cancel_locked(self, run_id: str, actor_id: str | None, operation_lock: RunLock) -> AgentSession:
+        run_dir = resolve_run_dir(self.project_root, run_id)
         replayed = replay_verified_run(run_dir)
         session = replayed.session
         if session.is_terminal:
             raise ValueError(f"session {run_id} is already {session.status}")
-        recorder = TraceRecorder(run_dir)
+        recorder = TraceRecorder(run_dir, run_lock=operation_lock)
         recorder.bind(
             actor_id=actor_id or session.actor_id,
             agent_id=session.agent_id,
             session_id=session.session_id,
             policy_version=session.policy_version,
         )
-        evidence = ProjectingTraceRecorder(recorder, SQLiteStateProjection(self.project_root))
+        projection = SQLiteStateProjection(self.project_root)
+        projection.rebuild()
+        evidence = ProjectingTraceRecorder(recorder, projection)
         journal = JsonlApprovalJournal(run_dir)
         for approval in replayed.approvals:
             if approval.is_pending:
+                expired = approval.is_expired()
                 decided = (
                     approval.expire(actor_id or session.actor_id)
-                    if approval.is_expired()
+                    if expired
                     else approval.deny(actor_id or session.actor_id, "session_cancelled")
                 )
+                if expired:
+                    evidence.append(
+                        "approval_expired",
+                        run_id=approval.run_id,
+                        tool_call_id=approval.tool_call_id,
+                        approval_id=approval.approval_id,
+                        expires_at=approval.expires_at,
+                    )
                 journal.append(evidence.append("approval_decided", **decided.to_dict()))
         for tool_call in replayed.tool_calls:
             if tool_call.status == "waiting_approval":
@@ -375,6 +463,7 @@ class AgentTrustRuntime:
             evaluate_hooks=evaluate_pre_tool_hooks,
             request_approval=request_interactive_approval,
             create_recovery_checkpoint=create_backup_for_write,
+            bind_recovery_checkpoint=bind_successful_write,
             map_facts=map_tool_result,
             store_facts=write_facts,
         )
@@ -398,6 +487,7 @@ class AgentTrustRuntime:
             run_id=run_id,
             source=source,
             runtime_mode=self.runtime_mode,
+            simulation_allowed=self.allow_simulation,
             actor_id=os.environ.get("AGENTTRUST_ACTOR_ID", "local-user"),
             agent_id=os.environ.get("AGENTTRUST_AGENT_ID"),
             session_id=os.environ.get("AGENTTRUST_SESSION_ID"),
@@ -417,6 +507,7 @@ class AgentTrustRuntime:
             project_root=self.project_root,
             run_dir=run_dir,
             runtime_mode=self.runtime_mode,
+            approval_mode=self.approval_mode,
             hooks=policy.hooks,
             facts_path=run_dir / "facts.jsonl",
         )

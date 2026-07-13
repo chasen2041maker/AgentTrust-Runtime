@@ -4,19 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Mapping
 
 from agenttrust.application.ports import (
     EvidenceRecord,
     EvidenceRecorderPort,
     FactMapperPort,
     FactStorePort,
+    RecoveryCheckpointBindingPort,
     PolicyEvaluatorPort,
     RecoveryCheckpointPort,
     SandboxPort,
     ToolExecutorPort,
 )
 from agenttrust.domain.decisions import FinalPermission, HookDecision, PermissionDecision, SandboxDecision
+from agenttrust.domain.approvals import reviewable_arguments
 from agenttrust.domain.lifecycle import ToolCallStatus
 from agenttrust.domain.models import ToolIntent, ToolResult
 from agenttrust.domain.policy import HookRule
@@ -24,7 +26,7 @@ from agenttrust.domain.policy import HookRule
 
 PermissionFinalizer = Callable[[PermissionDecision, str, str | None], FinalPermission]
 HookEvaluator = Callable[[ToolIntent, tuple[HookRule, ...]], HookDecision]
-ApprovalRequester = Callable[[PermissionDecision], str]
+ApprovalRequester = Callable[[PermissionDecision, Mapping[str, object]], str]
 ToolStatusObserver = Callable[[ToolCallStatus], None]
 
 
@@ -55,6 +57,7 @@ class RunToolUseCase:
         evaluate_hooks: HookEvaluator,
         request_approval: ApprovalRequester | None = None,
         create_recovery_checkpoint: RecoveryCheckpointPort | None = None,
+        bind_recovery_checkpoint: RecoveryCheckpointBindingPort | None = None,
         map_facts: FactMapperPort | None = None,
         store_facts: FactStorePort | None = None,
     ) -> None:
@@ -66,6 +69,7 @@ class RunToolUseCase:
         self._evaluate_hooks = evaluate_hooks
         self._request_approval = request_approval
         self._create_recovery_checkpoint = create_recovery_checkpoint
+        self._bind_recovery_checkpoint = bind_recovery_checkpoint
         self._map_facts = map_facts
         self._store_facts = store_facts
 
@@ -77,11 +81,16 @@ class RunToolUseCase:
         run_dir: Path,
         runtime_mode: str,
         hooks: tuple[HookRule, ...] = (),
+        approval_mode: str | None = None,
         facts_path: Path | None = None,
         on_tool_call_status: ToolStatusObserver | None = None,
-        defer_approval: bool = False,
         approval_response: str | None = None,
     ) -> ToolRunOutcome:
+        resolved_approval_mode = approval_mode or {
+            "interactive": "inline_prompt",
+            "noninteractive": "deny",
+            "test": "mock",
+        }.get(runtime_mode, "deny")
         self._evidence.append("tool_intent", **intent.to_dict())
         permission_decision = self._policy_evaluator.decide(intent)
         hook_decision = self._evaluate_hooks(intent, hooks)
@@ -93,23 +102,24 @@ class RunToolUseCase:
         if (
             permission_decision.effect == "ask"
             and approval_response is None
-            and runtime_mode == "interactive"
+            and resolved_approval_mode == "inline_prompt"
             and hook_decision.effect != "deny"
             and self._request_approval is not None
         ):
             self._evidence.append(
-                "approval_request",
+                "approval_prompted",
                 run_id=intent.run_id,
                 tool_call_id=intent.tool_call_id,
                 tool_name=intent.tool_name,
                 reason=permission_decision.reason,
+                arguments=reviewable_arguments(intent.arguments),
             )
-            approval_response = self._request_approval(permission_decision)
+            approval_response = self._request_approval(permission_decision, intent.arguments)
 
         if (
             permission_decision.effect == "ask"
             and approval_response is None
-            and defer_approval
+            and resolved_approval_mode == "deferred"
             and hook_decision.effect != "deny"
         ):
             final_permission = FinalPermission(
@@ -119,9 +129,9 @@ class RunToolUseCase:
                 approval_required=True,
             )
         elif approval_response is not None:
-            final_permission = self._finalize_permission(permission_decision, "interactive", approval_response)
+            final_permission = self._finalize_permission(permission_decision, "inline_prompt", approval_response)
         else:
-            final_permission = self._finalize_permission(permission_decision, runtime_mode, approval_response)
+            final_permission = self._finalize_permission(permission_decision, resolved_approval_mode, approval_response)
         if hook_decision.effect == "deny" and final_permission.final_effect != "deny":
             final_permission = FinalPermission(
                 effect=final_permission.effect,
@@ -168,8 +178,8 @@ class RunToolUseCase:
 
         if self._create_recovery_checkpoint is not None:
             backup_record = self._create_recovery_checkpoint(intent, project_root, run_dir)
-            if backup_record is not None:
-                self._evidence.append("backup_created", **backup_record.to_dict())
+        else:
+            backup_record = None
 
         if on_tool_call_status is not None:
             on_tool_call_status("executing")
@@ -180,6 +190,14 @@ class RunToolUseCase:
                 on_tool_call_status("failed")
             raise
         self._evidence.append("tool_result", **result.to_dict())
+        if (
+            backup_record is not None
+            and result.status == "ok"
+            and self._bind_recovery_checkpoint is not None
+        ):
+            recovery_checkpoint = self._bind_recovery_checkpoint(intent, result, backup_record, project_root)
+            if recovery_checkpoint is not None:
+                self._evidence.append("write_recovery_checkpoint", **recovery_checkpoint.to_dict())
         if on_tool_call_status is not None:
             on_tool_call_status("succeeded" if result.status == "ok" else "failed")
         facts = tuple(self._map_facts(result)) if self._map_facts is not None else ()

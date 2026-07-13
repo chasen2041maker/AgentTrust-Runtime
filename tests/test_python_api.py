@@ -4,6 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 
+import pytest
+
 from agenttrust import AgentTrustRuntime
 from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_trace
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
@@ -67,6 +69,23 @@ def test_python_sdk_session_records_approval_lifecycle_before_execution(tmp_path
     assert tool_statuses == ["requested", "waiting_approval", "approved", "executing", "succeeded"]
     session_statuses = [event["status"] for event in events if event["event_type"] == "session_status_changed"]
     assert session_statuses == ["running", "waiting_approval", "running", "completed"]
+
+
+def test_interactive_sdk_session_defaults_to_deferred_approval_without_prompting(tmp_path: Path) -> None:
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="interactive")
+
+    with runtime.session(actor_id="alice") as session:
+        pending = session.execute("write_file", {"path": "src/deferred.py", "content": "pending\n"})
+
+    assert pending.approval_request is not None
+    assert pending.outcome.result is None
+    assert session.session.status == "waiting_approval"
+    assert not (tmp_path / "src" / "deferred.py").exists()
+
+
+def test_session_rejects_mock_approval_mode_outside_test_runtime(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="only available in test"):
+        AgentTrustRuntime(tmp_path, runtime_mode="interactive", approval_mode="mock")
 
 
 def test_python_sdk_serializes_concurrent_tool_calls_and_keeps_trace_valid(tmp_path: Path) -> None:

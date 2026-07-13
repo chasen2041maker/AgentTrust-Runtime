@@ -18,6 +18,16 @@ class Fact:
     unit: str | None
     source_tool_call_id: str
     source_tool_name: str
+    provenance: str = "real"
+    trust_level: str = "trusted"
+
+    def __post_init__(self) -> None:
+        if self.provenance not in {"real", "simulated"}:
+            raise ValueError(f"invalid fact provenance: {self.provenance}")
+        if self.trust_level not in {"trusted", "test_only"}:
+            raise ValueError(f"invalid fact trust level: {self.trust_level}")
+        if (self.provenance, self.trust_level) not in {("real", "trusted"), ("simulated", "test_only")}:
+            raise ValueError("fact provenance and trust level must agree")
 
     def to_dict(self) -> dict[str, str | None]:
         return {
@@ -26,6 +36,8 @@ class Fact:
             "unit": self.unit,
             "source_tool_call_id": self.source_tool_call_id,
             "source_tool_name": self.source_tool_name,
+            "provenance": self.provenance,
+            "trust_level": self.trust_level,
         }
 
 
@@ -53,6 +65,8 @@ def explicit_fact_block_mapper(result: ToolResult) -> list[Fact]:
                 unit=" ".join(parts[1:]) if len(parts) > 1 else None,
                 source_tool_call_id=result.tool_call_id,
                 source_tool_name=result.tool_name,
+                provenance=_fact_provenance(result),
+                trust_level=_fact_trust_level(result),
             )
         )
     return facts
@@ -112,6 +126,8 @@ def read_facts(path: Path) -> list[Fact]:
                 unit=_optional_fact_text(raw, "unit"),
                 source_tool_call_id=_required_fact_text(raw, "source_tool_call_id"),
                 source_tool_name=_required_fact_text(raw, "source_tool_name"),
+                provenance=_optional_fact_text(raw, "provenance") or "real",
+                trust_level=_optional_fact_text(raw, "trust_level") or "trusted",
             )
         )
     return facts
@@ -124,6 +140,8 @@ def _metadata_fact(result: ToolResult, key: str, value: object, unit: str | None
         unit=unit,
         source_tool_call_id=result.tool_call_id,
         source_tool_name=result.tool_name,
+        provenance=_fact_provenance(result),
+        trust_level=_fact_trust_level(result),
     )
 
 
@@ -141,3 +159,11 @@ def _optional_fact_text(raw: dict[str, object], key: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"fact ledger requires {key} to be a non-empty string or null")
     return value
+
+
+def _fact_provenance(result: ToolResult) -> str:
+    return "simulated" if result.metadata.get("simulated") is True else "real"
+
+
+def _fact_trust_level(result: ToolResult) -> str:
+    return "test_only" if _fact_provenance(result) == "simulated" else "trusted"

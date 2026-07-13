@@ -24,6 +24,16 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
     tool_name = str(tool)
     config = resolve_mcp_server(project_root, server_name)
     explicitly_simulated = intent.arguments.get("simulated") is True
+    simulation_allowed = intent.runtime_mode == "test" or intent.simulation_allowed
+    if explicitly_simulated and not simulation_allowed:
+        return ToolResult(
+            run_id=intent.run_id,
+            tool_call_id=intent.tool_call_id,
+            tool_name=intent.tool_name,
+            status="error",
+            error="simulated MCP execution is only available in test mode or when explicitly enabled by the runtime",
+            metadata={"mcp_server_name": server_name, "simulation_denied": True},
+        )
     if config is None and intent.runtime_mode != "test" and not explicitly_simulated:
         return ToolResult(
             run_id=intent.run_id,
@@ -135,6 +145,7 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
             "mcp_risk_level": "medium",
             "mcp_execution_mode": "simulated",
             "mcp_simulation_explicit": explicitly_simulated,
+            "simulated": True,
             "mcp_sandbox_profile": mcp_sandbox_profile(project_root, str(server)) if intent.runtime_mode != "test" else "test",
         },
     )

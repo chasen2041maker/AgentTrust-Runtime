@@ -12,7 +12,7 @@ from agenttrust.application.run_tool import RunToolUseCase, ToolRunOutcome
 from agenttrust.domain.lifecycle import SessionStatus, ToolCallStatus
 from agenttrust.domain.models import ToolIntent
 from agenttrust.domain.policy import HookRule
-from agenttrust.domain.approvals import ApprovalRequest
+from agenttrust.domain.approvals import ApprovalRequest, reviewable_arguments
 from agenttrust.domain.sessions import AgentSession, SessionToolCall, arguments_digest
 
 
@@ -47,8 +47,10 @@ class GovernedSession:
         run_dir: Path,
         runtime_mode: str,
         hooks: tuple[HookRule, ...],
+        approval_mode: str = "deferred",
+        simulation_allowed: bool = False,
         approval_journal: ApprovalJournalPort | None = None,
-        defer_approvals: bool = False,
+        approval_ttl_seconds: int | None = None,
         initial_sequence: int = 0,
         started: bool = False,
         initial_facts: Sequence[EvidenceRecord] = (),
@@ -60,9 +62,11 @@ class GovernedSession:
         self._project_root = project_root
         self._run_dir = run_dir
         self._runtime_mode = runtime_mode
+        self._approval_mode = approval_mode
+        self._simulation_allowed = simulation_allowed
         self._hooks = hooks
         self._approval_journal = approval_journal
-        self._defer_approvals = defer_approvals
+        self._approval_ttl_seconds = approval_ttl_seconds
         self._sequence = initial_sequence
         self._started = started
         self._active_tool_call: SessionToolCall | None = None
@@ -130,6 +134,7 @@ class GovernedSession:
             arguments=dict(arguments),
             source=source,
             runtime_mode=self._runtime_mode,
+            simulation_allowed=self._simulation_allowed,
         )
         try:
             outcome = self._tool_runner.execute(
@@ -137,10 +142,10 @@ class GovernedSession:
                 project_root=self._project_root,
                 run_dir=self._run_dir,
                 runtime_mode=self._runtime_mode,
+                approval_mode=self._approval_mode,
                 hooks=self._hooks,
                 facts_path=self._run_dir / "facts.jsonl",
                 on_tool_call_status=self._record_tool_status,
-                defer_approval=self._defer_approvals,
             )
         except Exception:
             if not self._session.is_terminal:
@@ -162,6 +167,8 @@ class GovernedSession:
                 arguments_digest=completed_tool_call.arguments_digest,
                 policy_rule_id=outcome.permission_decision.rule_id,
                 reason=outcome.permission_decision.reason,
+                arguments_preview=reviewable_arguments(arguments),
+                ttl_seconds=self._approval_ttl_seconds,
             )
             approval_event = self._evidence.append("approval_requested", **approval_request.to_dict())
             if self._approval_journal is not None:
@@ -243,6 +250,7 @@ class GovernedSession:
             arguments=dict(arguments),
             source=source,
             runtime_mode=self._runtime_mode,
+            simulation_allowed=self._simulation_allowed,
         )
         try:
             outcome = self._tool_runner.execute(
@@ -250,6 +258,7 @@ class GovernedSession:
                 project_root=self._project_root,
                 run_dir=self._run_dir,
                 runtime_mode=self._runtime_mode,
+                approval_mode=self._approval_mode,
                 hooks=self._hooks,
                 facts_path=self._run_dir / "facts.jsonl",
                 on_tool_call_status=self._record_tool_status,

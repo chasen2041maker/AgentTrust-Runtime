@@ -17,6 +17,15 @@ def _digest_text(text: str) -> str:
 def shell(intent: ToolIntent, project_root: Path) -> ToolResult:
     simulated_output = intent.arguments.get("simulated_output")
     if isinstance(simulated_output, str):
+        if not _simulation_allowed(intent):
+            return ToolResult(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                status="error",
+                error="simulated shell output is only available in test mode or when explicitly enabled by the runtime",
+                metadata={"simulation_denied": True},
+            )
         return ToolResult(
             run_id=intent.run_id,
             tool_call_id=intent.tool_call_id,
@@ -62,6 +71,10 @@ def shell(intent: ToolIntent, project_root: Path) -> ToolResult:
         metadata={"exit_code": completed.returncode, "duration_ms": duration_ms},
         error=None if status == "ok" else f"shell exited with {completed.returncode}",
     )
+
+
+def _simulation_allowed(intent: ToolIntent) -> bool:
+    return intent.runtime_mode == "test" or intent.simulation_allowed
 
 
 def unsafe_shell_command(intent: ToolIntent, project_root: Path) -> ToolResult:
