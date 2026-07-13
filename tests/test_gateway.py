@@ -59,3 +59,4 @@ def test_mcp_tool_requires_consent_outside_test_mode(tmp_path: Path) -> None:
     assert denied.metadata["trust_required"] is True
     assert still_denied.metadata["consent_required"] is True
     assert allowed.status == "ok"
+    assert allowed.metadata["mcp_sandbox_profile"] == "strict"

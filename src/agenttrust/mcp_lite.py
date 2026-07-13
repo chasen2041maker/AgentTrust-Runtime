@@ -22,12 +22,14 @@ def has_mcp_consent(project_root: Path, server_name: str) -> bool:
     return server_name in _consent_records(project_root / ".agenttrust" / "mcp-consent.json")
 
 
-def trust_mcp_server(project_root: Path, server_name: str, allowed_tools: list[str]) -> Path:
+def trust_mcp_server(
+    project_root: Path, server_name: str, allowed_tools: list[str], sandbox_profile: str = "strict"
+) -> Path:
     """Register a trusted local MCP server and its allowed tool surface."""
     path = project_root / ".agenttrust" / "mcp-trust.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     records = _consent_records(path)
-    records[server_name] = {"allowed_tools": sorted(set(allowed_tools))}
+    records[server_name] = {"allowed_tools": sorted(set(allowed_tools)), "sandbox_profile": sandbox_profile}
     path.write_text(json.dumps(records, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     return path
 
@@ -35,6 +37,12 @@ def trust_mcp_server(project_root: Path, server_name: str, allowed_tools: list[s
 def is_mcp_tool_trusted(project_root: Path, server_name: str, tool_name: str) -> bool:
     record = _consent_records(project_root / ".agenttrust" / "mcp-trust.json").get(server_name)
     return isinstance(record, dict) and tool_name in record.get("allowed_tools", [])
+
+
+def mcp_sandbox_profile(project_root: Path, server_name: str) -> str | None:
+    record = _consent_records(project_root / ".agenttrust" / "mcp-trust.json").get(server_name)
+    profile = record.get("sandbox_profile") if isinstance(record, dict) else None
+    return str(profile) if profile else None
 
 
 def _consent_records(path: Path) -> dict[str, object]:

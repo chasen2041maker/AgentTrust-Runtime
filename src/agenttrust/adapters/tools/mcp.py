@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from agenttrust.domain.models import ToolIntent, ToolResult
-from agenttrust.mcp_lite import has_mcp_consent, is_mcp_tool_trusted
+from agenttrust.mcp_lite import has_mcp_consent, is_mcp_tool_trusted, mcp_sandbox_profile
 
 
 def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
@@ -56,5 +56,6 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
             "mcp_tool_name": str(tool),
             "mcp_tool_schema_hash": "sha256:" + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest(),
             "mcp_risk_level": "medium",
+            "mcp_sandbox_profile": mcp_sandbox_profile(project_root, str(server)) if intent.runtime_mode != "test" else "test",
         },
     )

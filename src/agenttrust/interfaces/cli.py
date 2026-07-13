@@ -95,6 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_trust = mcp_subparsers.add_parser("trust", help="Trust an MCP server tool.")
     mcp_trust.add_argument("server")
     mcp_trust.add_argument("--tool", action="append", required=True)
+    mcp_trust.add_argument("--sandbox-profile", choices=["strict", "standard"], default="strict")
 
     skills_parser = subparsers.add_parser("skills", help="Skill Lite helpers.")
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
@@ -258,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "mcp" and args.mcp_command == "trust":
-        print(trust_mcp_server(project_root, args.server, args.tool))
+        print(trust_mcp_server(project_root, args.server, args.tool, args.sandbox_profile))
         return 0
 
     if args.command == "skills":
