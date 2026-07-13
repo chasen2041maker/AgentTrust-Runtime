@@ -6,13 +6,22 @@ import hashlib
 import json
 from pathlib import Path
 
+from agenttrust.adapters.mcp.runtime import invoke_trusted_mcp_tool
 from agenttrust.domain.models import ToolIntent, ToolResult
-from agenttrust.mcp_lite import has_mcp_consent, is_mcp_tool_trusted, mcp_sandbox_profile
+from agenttrust.mcp_lite import (
+    has_mcp_consent,
+    is_mcp_tool_trusted,
+    mcp_sandbox_profile,
+    mcp_trust_record,
+    resolve_mcp_server,
+)
 
 
 def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
     server = intent.arguments.get("server", "unknown")
     tool = intent.arguments.get("tool", "unknown")
+    server_name = str(server)
+    tool_name = str(tool)
     if intent.runtime_mode != "test" and not is_mcp_tool_trusted(project_root, str(server), str(tool)):
         return ToolResult(
             run_id=intent.run_id,
@@ -30,6 +39,55 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
             status="error",
             error=f"MCP server '{server}' requires explicit consent",
             metadata={"mcp_server_name": str(server), "consent_required": True},
+        )
+    config = resolve_mcp_server(project_root, server_name)
+    if config is not None and intent.runtime_mode != "test":
+        trust_record = mcp_trust_record(project_root, server_name)
+        if trust_record is None:
+            return ToolResult(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                status="error",
+                error=f"MCP server '{server_name}' has no trusted tool fingerprint",
+                metadata={"mcp_server_name": server_name, "trust_required": True},
+            )
+        raw_input = intent.arguments.get("input", {})
+        if not isinstance(raw_input, dict):
+            return ToolResult(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                status="error",
+                error="MCP tool input must be an object",
+                metadata={"mcp_server_name": server_name, "mcp_tool_name": tool_name},
+            )
+        invocation = invoke_trusted_mcp_tool(project_root, config, trust_record, tool_name, raw_input)
+        metadata = {
+            "mcp_server_name": server_name,
+            "mcp_tool_name": tool_name,
+            "mcp_sandbox_profile": mcp_sandbox_profile(project_root, server_name),
+            "mcp_config_source": str(config.config_path),
+            **(invocation.metadata or {}),
+        }
+        if invocation.status != "ok":
+            return ToolResult(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                status="error",
+                error=invocation.error,
+                metadata=metadata,
+            )
+        digest = "sha256:" + hashlib.sha256(invocation.output_preview.encode("utf-8")).hexdigest()
+        return ToolResult(
+            run_id=intent.run_id,
+            tool_call_id=intent.tool_call_id,
+            tool_name=intent.tool_name,
+            status="ok",
+            output_preview=invocation.output_preview,
+            output_digest=digest,
+            metadata=metadata,
         )
     payload = {
         "server": server,
