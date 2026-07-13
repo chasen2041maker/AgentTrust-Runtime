@@ -10,30 +10,32 @@ Completed in the first refactor increment:
 - Old `schemas.py` and `permissions.*` paths remain compatibility exports, so current CLI and library consumers keep working.
 - Import-boundary tests enforce that the domain has no CLI, YAML, subprocess, filesystem, or concrete-tool dependency.
 
-In progress for Phase 2:
+Completed for Phase 2:
 
 - `agenttrust.application` now defines explicit ports plus `RunToolUseCase`, `RunFixtureUseCase`, `BuildContextUseCase`, and `RestoreRunUseCase`.
 - The current fixture and live entrypoints compose `RunToolUseCase` with existing local adapters, preserving their evidence event sequence.
-- Application tests use in-memory ports; concrete adapter extraction remains the next migration step.
+- Application tests use in-memory ports; fixture and live execution compose the extracted tool use case.
 
-In progress for Phase 3:
+Completed for Phase 3:
 
 - YAML policy loading, filesystem path sandboxing, JSONL evidence storage, and the local tool gateway now live under `agenttrust.adapters`.
 - Legacy `permissions.*` and `runtime.*` import paths remain thin compatibility facades.
-- Local file, shell, Git, MCP and skill handlers plus GroundGuard verification now live in `agenttrust.adapters`; the CLI boundary remains to be moved to `interfaces`.
+- Local file, shell, Git, MCP and skill handlers plus GroundGuard verification live in `agenttrust.adapters`; the CLI lives in `agenttrust.interfaces`.
 
-In progress for Phase 4:
+Completed for Phase 4 baseline:
 
 - Each run records actor, agent, session, and an exact policy snapshot with a stable policy-version digest.
 - JSONL evidence events form a hash chain, verified through `agenttrust evidence verify <run_id>`.
-- Identity and policy metadata now propagate to every evidence event; dedicated report use cases and telemetry exporters remain future extensions.
+- Identity and policy metadata propagate to every evidence event; hash-chain verification and portable NDJSON evidence export are available.
 
-In progress for Phase 5:
+Completed for Phase 5 baseline:
 
 - Local MCP servers require an explicit persisted consent record outside deterministic test mode; grant it with `agenttrust mcp consent <server>`.
-- A trusted-server registry and command allowlist are available through `agenttrust mcp trust <server> --tool <tool>`.
+- A trusted-server registry, tool allowlist, and sandbox profile are available through `agenttrust mcp trust <server> --tool <tool>`.
 - `AgentTrustRuntime` provides an embeddable Python SDK entrypoint for custom agent loops.
 - Framework adapter examples are available in `examples/openai_agents_sdk_adapter.py` and `examples/langgraph_tool_adapter.py`.
+
+Future extensions such as a networked policy service, native OpenTelemetry exporter, resumable remote approvals, and framework package integrations can build on these completed boundaries without changing the governed execution core.
 
 ## Current Architecture Snapshot
 
