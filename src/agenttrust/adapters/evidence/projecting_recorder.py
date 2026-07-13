@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
@@ -24,5 +25,12 @@ class ProjectingTraceRecorder:
 
     def append(self, event_type: str, **payload: Any) -> dict[str, Any]:
         event = self._recorder.append(event_type, **payload)
-        self._projection.apply_event(event)
+        try:
+            self._projection.apply_event(event)
+        except (sqlite3.Error, ValueError):
+            # SQLite is a disposable cache; rebuild it from authoritative JSONL.
+            try:
+                self._projection.rebuild()
+            except (OSError, sqlite3.Error, ValueError):
+                pass
         return event

@@ -32,8 +32,9 @@ from agenttrust.adapters.evidence.export import export_ndjson
 from agenttrust.adapters.evidence.otel import export_otel_trace
 from agenttrust.interfaces.python_api import AgentTrustRuntime
 from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
-from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace
 from agenttrust.adapters.evidence.projecting_recorder import ProjectingTraceRecorder
+from agenttrust.adapters.evidence.replay import replay_verified_run
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
 from agenttrust.adapters.evidence.sqlite_state import rebuild_state_from_traces
 from agenttrust.skills_lite import ensure_demo_skill, list_skills, load_skill
@@ -318,13 +319,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(state.list_approvals(), ensure_ascii=False, indent=2))
             return 0
         if args.approvals_command == "inspect":
-            approval = state.get_approval(args.approval_id)
+            approval = _approval_from_verified_evidence(project_root, args.approval_id)
             if approval is None:
                 print(f"approval not found: {args.approval_id}", file=sys.stderr)
                 return 2
-            print(json.dumps(approval, ensure_ascii=False, indent=2))
+            print(json.dumps(approval.to_dict(), ensure_ascii=False, indent=2))
             return 0
-        approval = state.get_approval(args.approval_id)
+        approval = _approval_from_verified_evidence(project_root, args.approval_id)
         if approval is None:
             print(f"approval not found: {args.approval_id}", file=sys.stderr)
             return 2
@@ -515,28 +516,28 @@ def main(argv: list[str] | None = None) -> int:
 def _decide_approval(
     project_root: Path,
     state: SQLiteStateProjection,
-    raw_approval: dict[str, object],
+    approval: ApprovalRequest,
     *,
     decision: str,
     approver_id: str,
     reason: str,
 ) -> ApprovalRequest:
-    approval = _approval_from_state(raw_approval)
     if not approval.is_pending:
         raise ValueError(f"approval {approval.approval_id} has already been decided")
     run_dir = resolve_run_dir(project_root, approval.run_id)
-    verification = verify_trace(run_dir / "trace.jsonl")
-    if verification["valid"] is not True:
-        raise ValueError("approval source trace failed hash-chain verification")
-    session = state.get_session(approval.run_id)
-    if session is None:
-        raise ValueError(f"approval {approval.approval_id} has no persisted session")
+    replayed = replay_verified_run(run_dir)
+    replayed_approval = next(
+        (item for item in replayed.approvals if item.approval_id == approval.approval_id),
+        None,
+    )
+    if replayed_approval is None or replayed_approval != approval:
+        raise ValueError("approval source trace no longer matches the requested approval")
     recorder = TraceRecorder(run_dir)
     recorder.bind(
-        actor_id=_state_text(session, "actor_id"),
-        agent_id=_state_optional_text(session, "agent_id"),
-        session_id=_state_text(session, "session_id"),
-        policy_version=_state_optional_text(session, "policy_version"),
+        actor_id=replayed.session.actor_id,
+        agent_id=replayed.session.agent_id,
+        session_id=replayed.session.session_id,
+        policy_version=replayed.session.policy_version,
     )
     if decision == "approve":
         decided = approval.approve(approver_id, reason)
@@ -550,38 +551,19 @@ def _decide_approval(
     return decided
 
 
-def _approval_from_state(raw: dict[str, object]) -> ApprovalRequest:
-    return ApprovalRequest(
-        approval_id=_state_text(raw, "approval_id"),
-        run_id=_state_text(raw, "run_id"),
-        tool_call_id=_state_text(raw, "tool_call_id"),
-        tool_name=_state_text(raw, "tool_name"),
-        arguments_digest=_state_text(raw, "arguments_digest"),
-        policy_rule_id=_state_optional_text(raw, "policy_rule_id"),
-        reason=_state_text(raw, "reason"),
-        requested_at=_state_text(raw, "requested_at"),
-        expires_at=_state_optional_text(raw, "expires_at"),
-        decision=_state_text(raw, "decision"),
-        approver_id=_state_optional_text(raw, "approver_id"),
-        decision_reason=_state_optional_text(raw, "decision_reason"),
-        decided_at=_state_optional_text(raw, "decided_at"),
-    )
+def _approval_from_verified_evidence(project_root: Path, approval_id: str) -> ApprovalRequest | None:
+    """Use raw trace text only to locate an approval, then verify and replay that run."""
 
-
-def _state_text(raw: dict[str, object], key: str) -> str:
-    value = raw.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"persisted state requires a non-empty {key}")
-    return value
-
-
-def _state_optional_text(raw: dict[str, object], key: str) -> str | None:
-    value = raw.get(key)
-    if value is None:
+    candidates: list[Path] = []
+    for trace_path in sorted((project_root / ".agenttrust" / "runs").glob("*/trace.jsonl")):
+        if any(event.get("approval_id") == approval_id for event in read_trace(trace_path)):
+            candidates.append(trace_path.parent)
+    if len(candidates) > 1:
+        raise ValueError(f"approval id appears in multiple evidence traces: {approval_id}")
+    if not candidates:
         return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"persisted state requires {key} to be a non-empty string or null")
-    return value
+    replayed = replay_verified_run(candidates[0])
+    return next((item for item in replayed.approvals if item.approval_id == approval_id), None)
 
 
 if __name__ == "__main__":

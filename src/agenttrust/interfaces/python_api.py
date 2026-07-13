@@ -6,26 +6,26 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Mapping, Sequence, cast
+from typing import Sequence
 from uuid import uuid4
 
 from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
-from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace, verify_trace
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
 from agenttrust.adapters.evidence.projecting_recorder import ProjectingTraceRecorder
+from agenttrust.adapters.evidence.replay import replay_verified_run
 from agenttrust.adapters.evidence.recovery import create_backup_for_write
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
-from agenttrust.adapters.policy.yaml_policy import load_policy, snapshot_policy
+from agenttrust.adapters.policy.yaml_policy import load_policy, policy_digest, snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
 from agenttrust.adapters.tools.gateway import ToolGateway, ToolHandler
-from agenttrust.adapters.verification.mapper import Fact, map_tool_result, read_facts, write_facts
+from agenttrust.adapters.verification.mapper import Fact, map_tool_result, write_facts
 from agenttrust.application.governed_session import GovernedSession, SessionToolRun
 from agenttrust.application.ports import EvidenceRecorderPort
 from agenttrust.application.run_tool import RunToolUseCase, ToolRunOutcome
 from agenttrust.domain.approvals import ApprovalRequest
-from agenttrust.domain.lifecycle import SessionStatus, ToolCallStatus
 from agenttrust.domain.models import ToolIntent
 from agenttrust.domain.policy import Policy
-from agenttrust.domain.sessions import AgentSession, SessionToolCall, arguments_digest
+from agenttrust.domain.sessions import AgentSession, SessionToolCall
 from agenttrust.groundguard_adapter import CoverageReport, verify_answer, write_coverage_report
 from agenttrust.permissions import PermissionEngine, evaluate_pre_tool_hooks, finalize_permission, request_interactive_approval
 from agenttrust.runtime.fixtures import create_run_id
@@ -63,6 +63,7 @@ class AgentTrustSession:
         restored: bool = False,
         pending_tool_call: SessionToolCall | None = None,
         pending_approval: ApprovalRequest | None = None,
+        pending_arguments: dict[str, object] | None = None,
         timeout_seconds: float | None = None,
         permission_engine: PermissionEngine | None = None,
         tool_gateway: ToolGateway | None = None,
@@ -73,6 +74,7 @@ class AgentTrustSession:
         self._restored = restored
         self._pending_tool_call = pending_tool_call
         self._pending_approval = pending_approval
+        self._pending_arguments = pending_arguments
         self._deadline = monotonic() + timeout_seconds if timeout_seconds is not None else None
         self._permission_engine = permission_engine
         self._tool_gateway = tool_gateway
@@ -138,16 +140,17 @@ class AgentTrustSession:
         if not self._entered:
             raise RuntimeError("session tools must execute inside the context manager")
         self._raise_if_timed_out()
-        if self._pending_tool_call is None or self._pending_approval is None:
+        if self._pending_tool_call is None or self._pending_approval is None or self._pending_arguments is None:
             raise RuntimeError("session has no approved or denied pending tool call to resume")
         response = "approve" if self._pending_approval.decision == "approved" else "deny"
         result = self._governed_session.resume_tool_call(
             self._pending_tool_call,
-            _arguments_from_trace(self.run_dir, self._pending_tool_call),
+            self._pending_arguments,
             response,
         )
         self._pending_tool_call = None
         self._pending_approval = None
+        self._pending_arguments = None
         return result
 
     def finalize_answer(self, answer: str, required_fact_keys: Sequence[str] = ()) -> FinalAnswerResult:
@@ -245,30 +248,16 @@ class AgentTrustRuntime:
     def resume(self, run_id: str, timeout_seconds: float | None = None) -> AgentTrustSession:
         if timeout_seconds is not None and timeout_seconds < 0:
             raise ValueError("timeout_seconds must be zero or greater")
-        state = SQLiteStateProjection(self.project_root)
-        raw_session = state.get_session(run_id)
-        if raw_session is None:
-            raise ValueError(f"session not found: {run_id}")
-        session = _session_from_state(raw_session)
+        run_dir = self.project_root / ".agenttrust" / "runs" / run_id
+        replayed = replay_verified_run(run_dir)
+        session = replayed.session
         if session.status != "waiting_approval":
             raise ValueError(f"session {run_id} is not waiting for approval")
-        run_dir = self.project_root / ".agenttrust" / "runs" / run_id
-        verification = verify_trace(run_dir / "trace.jsonl")
-        if verification["valid"] is not True:
-            raise ValueError(f"cannot resume session with invalid evidence: {verification.get('reason', 'unknown')}")
-        waiting_calls = [
-            _tool_call_from_state(raw)
-            for raw in state.list_tool_calls(run_id)
-            if raw.get("status") == "waiting_approval"
-        ]
+        waiting_calls = [call for call in replayed.tool_calls if call.status == "waiting_approval"]
         if len(waiting_calls) != 1:
             raise ValueError(f"session {run_id} must have exactly one waiting tool call to resume")
         tool_call = waiting_calls[0]
-        approvals = [
-            _approval_from_state(raw)
-            for raw in state.list_approvals(run_id)
-            if raw.get("tool_call_id") == tool_call.tool_call_id
-        ]
+        approvals = [approval for approval in replayed.approvals if approval.tool_call_id == tool_call.tool_call_id]
         if len(approvals) != 1:
             raise ValueError(f"tool call {tool_call.tool_call_id} must have exactly one approval request")
         approval = approvals[0]
@@ -277,6 +266,8 @@ class AgentTrustRuntime:
         policy_path = run_dir / "policy-snapshot.yaml"
         if not policy_path.exists():
             raise ValueError(f"policy snapshot not found for session {run_id}")
+        if session.policy_version != policy_digest(policy_path.read_bytes()):
+            raise ValueError(f"policy snapshot digest does not match verified session evidence for {run_id}")
         policy = load_policy(policy_path)
         recorder = TraceRecorder(run_dir)
         recorder.bind(
@@ -285,7 +276,7 @@ class AgentTrustRuntime:
             session_id=session.session_id,
             policy_version=session.policy_version,
         )
-        evidence = ProjectingTraceRecorder(recorder, state)
+        evidence = ProjectingTraceRecorder(recorder, SQLiteStateProjection(self.project_root))
         evidence.append(
             "run_resumed",
             run_id=run_id,
@@ -303,9 +294,9 @@ class AgentTrustRuntime:
             runtime_mode=self.runtime_mode,
             hooks=policy.hooks,
             approval_journal=JsonlApprovalJournal(run_dir),
-            initial_sequence=max(call.sequence for call in (_tool_call_from_state(raw) for raw in state.list_tool_calls(run_id))),
+            initial_sequence=max((call.sequence for call in replayed.tool_calls), default=0),
             started=True,
-            initial_facts=read_facts(run_dir / "facts.jsonl"),
+            initial_facts=replayed.facts,
             final_answer_mode=policy.final_answer_mode,
         )
         return AgentTrustSession(
@@ -315,23 +306,18 @@ class AgentTrustRuntime:
             restored=True,
             pending_tool_call=tool_call,
             pending_approval=approval,
+            pending_arguments=replayed.arguments_for(tool_call),
             timeout_seconds=timeout_seconds,
             permission_engine=permission_engine,
             tool_gateway=tool_gateway,
         )
 
     def cancel(self, run_id: str, actor_id: str | None = None) -> AgentSession:
-        state = SQLiteStateProjection(self.project_root)
-        raw_session = state.get_session(run_id)
-        if raw_session is None:
-            raise ValueError(f"session not found: {run_id}")
-        session = _session_from_state(raw_session)
+        run_dir = self.project_root / ".agenttrust" / "runs" / run_id
+        replayed = replay_verified_run(run_dir)
+        session = replayed.session
         if session.is_terminal:
             raise ValueError(f"session {run_id} is already {session.status}")
-        run_dir = self.project_root / ".agenttrust" / "runs" / run_id
-        verification = verify_trace(run_dir / "trace.jsonl")
-        if verification["valid"] is not True:
-            raise ValueError(f"cannot cancel session with invalid evidence: {verification.get('reason', 'unknown')}")
         recorder = TraceRecorder(run_dir)
         recorder.bind(
             actor_id=actor_id or session.actor_id,
@@ -339,15 +325,13 @@ class AgentTrustRuntime:
             session_id=session.session_id,
             policy_version=session.policy_version,
         )
-        evidence = ProjectingTraceRecorder(recorder, state)
+        evidence = ProjectingTraceRecorder(recorder, SQLiteStateProjection(self.project_root))
         journal = JsonlApprovalJournal(run_dir)
-        for raw_approval in state.list_approvals(run_id):
-            approval = _approval_from_state(raw_approval)
+        for approval in replayed.approvals:
             if approval.is_pending:
                 decided = approval.deny(actor_id or session.actor_id, "session_cancelled")
                 journal.append(evidence.append("approval_decided", **decided.to_dict()))
-        for raw_tool_call in state.list_tool_calls(run_id):
-            tool_call = _tool_call_from_state(raw_tool_call)
+        for tool_call in replayed.tool_calls:
             if tool_call.status == "waiting_approval":
                 denied = tool_call.deny_by_policy()
                 evidence.append("tool_call_status_changed", **denied.to_dict())
@@ -417,82 +401,3 @@ class AgentTrustRuntime:
         )
         recorder.append("run_completed", run_id=run_id, status="completed")
         return PythonRunResult(run_id=run_id, run_dir=run_dir, outcome=outcome)
-
-
-def _session_from_state(raw: Mapping[str, object]) -> AgentSession:
-    return AgentSession(
-        run_id=_state_text(raw, "run_id"),
-        actor_id=_state_text(raw, "actor_id"),
-        session_id=_state_text(raw, "session_id"),
-        created_at=_state_text(raw, "created_at"),
-        updated_at=_state_text(raw, "updated_at"),
-        agent_id=_state_optional_text(raw, "agent_id"),
-        policy_version=_state_optional_text(raw, "policy_version"),
-        status=cast(SessionStatus, _state_text(raw, "status")),
-    )
-
-
-def _tool_call_from_state(raw: Mapping[str, object]) -> SessionToolCall:
-    sequence = raw.get("sequence")
-    if isinstance(sequence, bool) or not isinstance(sequence, int):
-        raise ValueError("persisted tool call requires an integer sequence")
-    return SessionToolCall(
-        run_id=_state_text(raw, "run_id"),
-        session_id=_state_text(raw, "session_id"),
-        tool_call_id=_state_text(raw, "tool_call_id"),
-        sequence=sequence,
-        tool_name=_state_text(raw, "tool_name"),
-        arguments_digest=_state_text(raw, "arguments_digest"),
-        requested_at=_state_text(raw, "requested_at"),
-        updated_at=_state_text(raw, "updated_at"),
-        status=cast(ToolCallStatus, _state_text(raw, "status")),
-        policy_rule_id=_state_optional_text(raw, "policy_rule_id"),
-    )
-
-
-def _approval_from_state(raw: Mapping[str, object]) -> ApprovalRequest:
-    return ApprovalRequest(
-        approval_id=_state_text(raw, "approval_id"),
-        run_id=_state_text(raw, "run_id"),
-        tool_call_id=_state_text(raw, "tool_call_id"),
-        tool_name=_state_text(raw, "tool_name"),
-        arguments_digest=_state_text(raw, "arguments_digest"),
-        policy_rule_id=_state_optional_text(raw, "policy_rule_id"),
-        reason=_state_text(raw, "reason"),
-        requested_at=_state_text(raw, "requested_at"),
-        expires_at=_state_optional_text(raw, "expires_at"),
-        decision=_state_text(raw, "decision"),
-        approver_id=_state_optional_text(raw, "approver_id"),
-        decision_reason=_state_optional_text(raw, "decision_reason"),
-        decided_at=_state_optional_text(raw, "decided_at"),
-    )
-
-
-def _arguments_from_trace(run_dir: Path, tool_call: SessionToolCall) -> dict[str, object]:
-    for event in reversed(read_trace(run_dir / "trace.jsonl")):
-        if event.get("event_type") != "tool_intent" or event.get("tool_call_id") != tool_call.tool_call_id:
-            continue
-        raw_arguments = event.get("arguments")
-        if not isinstance(raw_arguments, dict) or not all(isinstance(key, str) for key in raw_arguments):
-            raise ValueError(f"tool call {tool_call.tool_call_id} has invalid persisted arguments")
-        arguments = dict(raw_arguments)
-        if arguments_digest(arguments) != tool_call.arguments_digest:
-            raise ValueError("persisted tool arguments do not match the approval-bound digest")
-        return arguments
-    raise ValueError(f"tool call {tool_call.tool_call_id} has no persisted tool intent")
-
-
-def _state_text(raw: Mapping[str, object], key: str) -> str:
-    value = raw.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"persisted state requires a non-empty {key}")
-    return value
-
-
-def _state_optional_text(raw: Mapping[str, object], key: str) -> str | None:
-    value = raw.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"persisted state requires {key} to be a non-empty string or null")
-    return value
