@@ -20,7 +20,7 @@ In progress for Phase 3:
 
 - YAML policy loading, filesystem path sandboxing, JSONL evidence storage, and the local tool gateway now live under `agenttrust.adapters`.
 - Legacy `permissions.*` and `runtime.*` import paths remain thin compatibility facades.
-- Individual local tool handlers, recovery persistence, GroundGuard verification, and the CLI boundary still need to move to their final adapter/interface packages.
+- Individual local tool handlers, GroundGuard verification, and the CLI boundary still need to move to their final adapter/interface packages.
 
 ## Current Architecture Snapshot
 

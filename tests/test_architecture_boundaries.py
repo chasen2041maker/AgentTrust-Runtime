@@ -10,6 +10,7 @@ from agenttrust.domain.decisions import FinalPermission, HookDecision, Permissio
 from agenttrust.domain.models import ToolIntent, ToolResult, utc_now_iso
 from agenttrust.domain.policy import HookRule, Policy, PolicyRule
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder as AdapterTraceRecorder
+from agenttrust.adapters.evidence.recovery import restore_run as adapter_restore_run
 from agenttrust.adapters.policy.yaml_policy import load_policy as adapter_load_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox as AdapterPathSandbox
 from agenttrust.adapters.tools.gateway import ToolGateway as AdapterToolGateway
@@ -23,6 +24,7 @@ from agenttrust.permissions.policy import PolicyRule as LegacyPolicyRule
 from agenttrust.permissions.sandbox import PathSandbox as LegacyPathSandbox
 from agenttrust.permissions.sandbox import SandboxDecision as LegacySandboxDecision
 from agenttrust.runtime.gateway import ToolGateway as LegacyToolGateway
+from agenttrust.runtime.recovery import restore_run as legacy_restore_run
 from agenttrust.runtime.trace import TraceRecorder as LegacyTraceRecorder
 from agenttrust.schemas import ToolIntent as LegacyToolIntent
 from agenttrust.schemas import ToolResult as LegacyToolResult
@@ -119,3 +121,4 @@ def test_legacy_infrastructure_imports_reexport_adapter_implementations() -> Non
     assert LegacyPathSandbox is AdapterPathSandbox
     assert LegacyTraceRecorder is AdapterTraceRecorder
     assert LegacyToolGateway is AdapterToolGateway
+    assert legacy_restore_run is adapter_restore_run
