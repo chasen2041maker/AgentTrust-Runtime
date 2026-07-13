@@ -9,7 +9,8 @@ from agenttrust.domain.models import ToolIntent, ToolResult
 from agenttrust.adapters.tools.file import read_file, write_file
 from agenttrust.adapters.tools.shell import shell
 from agenttrust.adapters.tools.git import git_diff
-from agenttrust.tools import mcp_tool, skill_context
+from agenttrust.adapters.tools.mcp import mcp_tool
+from agenttrust.adapters.tools.skill import skill_context
 
 
 ToolHandler = Callable[[ToolIntent, Path], ToolResult]
