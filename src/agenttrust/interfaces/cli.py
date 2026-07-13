@@ -18,6 +18,7 @@ from agenttrust.runtime.recovery import restore_run
 from agenttrust.runtime.report import resolve_run_dir, timeline_lines, write_html_report, write_markdown_report
 from agenttrust.runtime.trace import verify_trace
 from agenttrust.adapters.evidence.export import export_ndjson
+from agenttrust.interfaces.python_api import AgentTrustRuntime
 from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
 from agenttrust.adapters.evidence.projecting_recorder import ProjectingTraceRecorder
@@ -55,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="Run a simple task, optionally with a local skill.")
     run_parser.add_argument("task", nargs="?", default="")
+    run_parser.add_argument("run_id", nargs="?")
     run_parser.add_argument("--skill")
 
     run_fixture_parser = subparsers.add_parser("run-fixture", help="Run a deterministic fixture.")
@@ -173,6 +175,34 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run":
         init_project(project_root)
+        if args.task in {"resume", "cancel"}:
+            if not args.run_id:
+                print(f"run {args.task} requires a run_id", file=sys.stderr)
+                return 2
+            try:
+                runtime = AgentTrustRuntime(project_root)
+                if args.task == "resume":
+                    with runtime.resume(args.run_id) as resumed_session:
+                        outcome = resumed_session.resume_pending_approval()
+                    print(
+                        json.dumps(
+                            {
+                                "run_id": resumed_session.run_id,
+                                "session_status": resumed_session.session.status,
+                                "tool_call_id": outcome.tool_call.tool_call_id,
+                                "tool_call_status": outcome.tool_call.status,
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        )
+                    )
+                else:
+                    cancelled = runtime.cancel(args.run_id)
+                    print(json.dumps(cancelled.to_dict(), ensure_ascii=False, indent=2))
+            except (OSError, RuntimeError, ValueError) as exc:
+                print(f"run {args.task} failed: {exc}", file=sys.stderr)
+                return 2
+            return 0
         if args.skill:
             try:
                 load_skill(project_root, args.skill)

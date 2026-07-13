@@ -80,6 +80,7 @@ class RunToolUseCase:
         facts_path: Path | None = None,
         on_tool_call_status: ToolStatusObserver | None = None,
         defer_approval: bool = False,
+        approval_response: str | None = None,
     ) -> ToolRunOutcome:
         self._evidence.append("tool_intent", **intent.to_dict())
         permission_decision = self._policy_evaluator.decide(intent)
@@ -87,11 +88,11 @@ class RunToolUseCase:
         if hook_decision.hook_id is not None:
             self._evidence.append("hook_decision", **hook_decision.to_dict())
 
-        approval_response = None
-        if permission_decision.effect == "ask" and on_tool_call_status is not None:
+        if permission_decision.effect == "ask" and approval_response is None and on_tool_call_status is not None:
             on_tool_call_status("waiting_approval")
         if (
             permission_decision.effect == "ask"
+            and approval_response is None
             and runtime_mode == "interactive"
             and hook_decision.effect != "deny"
             and self._request_approval is not None
@@ -105,13 +106,20 @@ class RunToolUseCase:
             )
             approval_response = self._request_approval(permission_decision)
 
-        if permission_decision.effect == "ask" and defer_approval and hook_decision.effect != "deny":
+        if (
+            permission_decision.effect == "ask"
+            and approval_response is None
+            and defer_approval
+            and hook_decision.effect != "deny"
+        ):
             final_permission = FinalPermission(
                 effect=permission_decision.effect,
                 final_effect="ask",
                 reason="approval_pending",
                 approval_required=True,
             )
+        elif approval_response is not None:
+            final_permission = self._finalize_permission(permission_decision, "interactive", approval_response)
         else:
             final_permission = self._finalize_permission(permission_decision, runtime_mode, approval_response)
         if hook_decision.effect == "deny" and final_permission.final_effect != "deny":

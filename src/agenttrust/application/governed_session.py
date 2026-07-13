@@ -12,7 +12,7 @@ from agenttrust.domain.lifecycle import SessionStatus, ToolCallStatus
 from agenttrust.domain.models import ToolIntent
 from agenttrust.domain.policy import HookRule
 from agenttrust.domain.approvals import ApprovalRequest
-from agenttrust.domain.sessions import AgentSession, SessionToolCall
+from agenttrust.domain.sessions import AgentSession, SessionToolCall, arguments_digest
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,8 @@ class GovernedSession:
         hooks: tuple[HookRule, ...],
         approval_journal: ApprovalJournalPort | None = None,
         defer_approvals: bool = False,
+        initial_sequence: int = 0,
+        started: bool = False,
     ) -> None:
         self._session = session
         self._tool_runner = tool_runner
@@ -50,8 +52,8 @@ class GovernedSession:
         self._hooks = hooks
         self._approval_journal = approval_journal
         self._defer_approvals = defer_approvals
-        self._sequence = 0
-        self._started = False
+        self._sequence = initial_sequence
+        self._started = started
         self._active_tool_call: SessionToolCall | None = None
         self._facts: list[EvidenceRecord] = []
 
@@ -152,6 +154,57 @@ class GovernedSession:
         if self._session.status == "running":
             self._transition_session("completed")
         return self._session
+
+    def resume_tool_call(
+        self,
+        tool_call: SessionToolCall,
+        arguments: Mapping[str, object],
+        approval_response: str,
+        source: str = "approval_resume",
+    ) -> SessionToolRun:
+        if not self._started:
+            raise RuntimeError("session has not been restored")
+        if self._session.status != "waiting_approval":
+            raise RuntimeError(f"cannot resume a tool while session is {self._session.status}")
+        if tool_call.status != "waiting_approval":
+            raise RuntimeError(f"cannot resume tool call while it is {tool_call.status}")
+        if approval_response not in {"approve", "deny"}:
+            raise ValueError(f"invalid persisted approval response: {approval_response}")
+        if arguments_digest(arguments) != tool_call.arguments_digest:
+            raise ValueError("persisted tool arguments do not match the approval-bound digest")
+
+        self._active_tool_call = tool_call
+        intent = ToolIntent(
+            run_id=self._session.run_id,
+            tool_call_id=tool_call.tool_call_id,
+            tool_name=tool_call.tool_name,
+            arguments=dict(arguments),
+            source=source,
+            runtime_mode=self._runtime_mode,
+        )
+        try:
+            outcome = self._tool_runner.execute(
+                intent,
+                project_root=self._project_root,
+                run_dir=self._run_dir,
+                runtime_mode=self._runtime_mode,
+                hooks=self._hooks,
+                facts_path=self._run_dir / "facts.jsonl",
+                on_tool_call_status=self._record_tool_status,
+                approval_response=approval_response,
+            )
+        except Exception:
+            if not self._session.is_terminal:
+                self._transition_session("failed")
+            raise
+        finally:
+            completed_tool_call = self._active_tool_call
+            self._active_tool_call = None
+
+        if completed_tool_call is None:
+            raise RuntimeError("resumed tool call lifecycle did not complete")
+        self._facts.extend(outcome.facts)
+        return SessionToolRun(session=self._session, tool_call=completed_tool_call, outcome=outcome)
 
     def fail(self) -> AgentSession:
         if self._started and not self._session.is_terminal:
