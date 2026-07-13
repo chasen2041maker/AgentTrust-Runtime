@@ -120,7 +120,12 @@ BUILTIN_FIXTURES: dict[str, Fixture] = {
         tool_intents=(
             {
                 "tool_name": "mcp_tool",
-                "arguments": {"server": "local-files", "tool": "read_project_file", "input": {"path": "README.md"}},
+                "arguments": {
+                    "server": "local-files",
+                    "tool": "read_project_file",
+                    "input": {"path": "README.md"},
+                    "simulated": True,
+                },
             },
         ),
     ),
@@ -129,7 +134,12 @@ BUILTIN_FIXTURES: dict[str, Fixture] = {
         tool_intents=(
             {
                 "tool_name": "mcp_tool",
-                "arguments": {"server": "local-files", "tool": "read_project_file", "input": {"path": "README.md"}},
+                "arguments": {
+                    "server": "local-files",
+                    "tool": "read_project_file",
+                    "input": {"path": "README.md"},
+                    "simulated": True,
+                },
             },
         ),
         final_answer="The mcp_tool_calls value is 1 [fact:mcp_tool_calls].",

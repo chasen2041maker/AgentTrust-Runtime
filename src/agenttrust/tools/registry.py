@@ -60,7 +60,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "mcp_tool": ToolSpec(
         name="mcp_tool",
         category="mcp",
-        input_schema={"server": "string", "tool": "string", "input": "object"},
+        input_schema={"server": "string", "tool": "string", "input": "object", "simulated": "boolean?"},
         default_effect="ask",
         source="mcp_lite",
     ),

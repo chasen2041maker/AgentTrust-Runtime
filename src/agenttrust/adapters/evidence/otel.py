@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Mapping
 
-from agenttrust.adapters.evidence.jsonl_store import read_trace
+from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_trace
 
 
 def export_otel_trace(
@@ -21,7 +22,15 @@ def export_otel_trace(
     observability view from verified-shape evidence after the session finishes.
     """
 
+    trace_path = run_dir / "trace.jsonl"
+    verification = verify_trace(trace_path)
+    if verification["valid"] is not True:
+        raise ValueError(f"cannot export invalid evidence trace: {verification.get('reason', 'unknown')}")
+    events = read_trace(trace_path)
+    if not events:
+        return 0
     try:
+        api_trace_module = import_module("opentelemetry.trace")
         trace_module = import_module("opentelemetry.sdk.trace")
         export_module = import_module("opentelemetry.sdk.trace.export")
     except ImportError as exc:
@@ -38,17 +47,22 @@ def export_otel_trace(
     provider = getattr(trace_module, "TracerProvider")()
     provider.add_span_processor(getattr(export_module, "SimpleSpanProcessor")(span_exporter))
     tracer = provider.get_tracer("agenttrust.runtime")
-    events = read_trace(run_dir / "trace.jsonl")
-    if not events:
-        return 0
     root_event = next((event for event in events if isinstance(event.get("run_id"), str)), events[0])
     emitted = 0
-    with tracer.start_as_current_span("agenttrust.session", attributes=_session_attributes(root_event)):
-        emitted += 1
-        calls = _events_by_tool_call(events)
-        for call_events in calls.values():
-            emitted += _emit_tool_spans(tracer, call_events)
-        emitted += _emit_final_answer_spans(tracer, events)
+    root_span = tracer.start_span(
+        "agenttrust.session",
+        attributes=_session_attributes(root_event),
+        start_time=_timestamp_ns(root_event),
+    )
+    try:
+        with getattr(api_trace_module, "use_span")(root_span, end_on_exit=False):
+            emitted += 1
+            calls = _events_by_tool_call(events)
+            for call_events in calls.values():
+                emitted += _emit_tool_spans(tracer, api_trace_module, call_events)
+            emitted += _emit_final_answer_spans(tracer, api_trace_module, events)
+    finally:
+        root_span.end(end_time=_timestamp_ns(events[-1]))
     provider.force_flush()
     provider.shutdown()
     return emitted
@@ -64,36 +78,56 @@ def _events_by_tool_call(events: list[dict[str, object]]) -> dict[str, list[dict
     return calls
 
 
-def _emit_tool_spans(tracer: Any, events: list[dict[str, object]]) -> int:
+def _emit_tool_spans(tracer: Any, api_trace_module: Any, events: list[dict[str, object]]) -> int:
     first = events[0]
     emitted = 0
-    with tracer.start_as_current_span("agenttrust.tool", attributes=_tool_attributes(first)):
-        emitted += 1
-        for event in events:
-            span_name = _stage_span_name(event.get("event_type"))
-            if span_name is None:
-                continue
-            with tracer.start_as_current_span(span_name, attributes=_event_attributes(event)):
-                emitted += 1
-            if event.get("event_type") == "permission_decision" and event.get("approval_required") is True:
-                with tracer.start_as_current_span("agenttrust.approval", attributes=_event_attributes(event)):
-                    emitted += 1
+    tool_span = tracer.start_span(
+        "agenttrust.tool",
+        attributes=_tool_attributes(first),
+        start_time=_timestamp_ns(first),
+    )
+    try:
+        with getattr(api_trace_module, "use_span")(tool_span, end_on_exit=False):
+            emitted += 1
+            for event in events:
+                span_name = _stage_span_name(event.get("event_type"))
+                if span_name is None:
+                    continue
+                emitted += _emit_event_span(tracer, span_name, event)
+                if event.get("event_type") == "permission_decision" and event.get("approval_required") is True:
+                    emitted += _emit_event_span(tracer, "agenttrust.approval", event)
+    finally:
+        tool_span.end(end_time=_timestamp_ns(events[-1]))
     return emitted
 
 
-def _emit_final_answer_spans(tracer: Any, events: list[dict[str, object]]) -> int:
+def _emit_final_answer_spans(tracer: Any, api_trace_module: Any, events: list[dict[str, object]]) -> int:
     final_events = [event for event in events if event.get("event_type") in {"final_answer_submitted", "groundguard_check"}]
     if not final_events:
         return 0
     emitted = 0
-    with tracer.start_as_current_span("agenttrust.final_answer", attributes=_event_attributes(final_events[0])):
-        emitted += 1
-        for event in final_events:
-            if event.get("event_type") != "groundguard_check":
-                continue
-            with tracer.start_as_current_span("agenttrust.groundguard", attributes=_event_attributes(event)):
-                emitted += 1
+    final_span = tracer.start_span(
+        "agenttrust.final_answer",
+        attributes=_event_attributes(final_events[0]),
+        start_time=_timestamp_ns(final_events[0]),
+    )
+    try:
+        with getattr(api_trace_module, "use_span")(final_span, end_on_exit=False):
+            emitted += 1
+            for event in final_events:
+                if event.get("event_type") != "groundguard_check":
+                    continue
+                emitted += _emit_event_span(tracer, "agenttrust.groundguard", event)
+    finally:
+        final_span.end(end_time=_timestamp_ns(final_events[-1]))
     return emitted
+
+
+def _emit_event_span(tracer: Any, name: str, event: Mapping[str, object]) -> int:
+    timestamp = _timestamp_ns(event)
+    span = tracer.start_span(name, attributes=_event_attributes(event), start_time=timestamp)
+    span.end(end_time=timestamp)
+    return 1
 
 
 def _stage_span_name(event_type: object) -> str | None:
@@ -143,3 +177,17 @@ def _event_attributes(event: Mapping[str, object]) -> dict[str, object]:
         if isinstance(value, (str, bool, int, float)):
             attributes[f"agenttrust.{key}"] = value
     return attributes
+
+
+def _timestamp_ns(event: Mapping[str, object]) -> int:
+    created_at = event.get("created_at")
+    if not isinstance(created_at, str) or not created_at:
+        raise ValueError("evidence event requires an ISO-8601 created_at timestamp")
+    try:
+        timestamp = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"invalid evidence event timestamp: {created_at}") from exc
+    if timestamp.tzinfo is None:
+        raise ValueError(f"evidence event timestamp must include a timezone: {created_at}")
+    seconds = int(timestamp.timestamp())
+    return seconds * 1_000_000_000 + timestamp.microsecond * 1_000

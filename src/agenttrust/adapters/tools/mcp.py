@@ -22,7 +22,18 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
     tool = intent.arguments.get("tool", "unknown")
     server_name = str(server)
     tool_name = str(tool)
-    if intent.runtime_mode != "test" and not is_mcp_tool_trusted(project_root, str(server), str(tool)):
+    config = resolve_mcp_server(project_root, server_name)
+    explicitly_simulated = intent.arguments.get("simulated") is True
+    if config is None and intent.runtime_mode != "test" and not explicitly_simulated:
+        return ToolResult(
+            run_id=intent.run_id,
+            tool_call_id=intent.tool_call_id,
+            tool_name=intent.tool_name,
+            status="error",
+            error=f"MCP server configuration was not found: {server_name}",
+            metadata={"mcp_server_name": server_name, "mcp_config_required": True},
+        )
+    if intent.runtime_mode != "test" and not explicitly_simulated and not is_mcp_tool_trusted(project_root, str(server), str(tool)):
         return ToolResult(
             run_id=intent.run_id,
             tool_call_id=intent.tool_call_id,
@@ -31,7 +42,7 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
             error=f"MCP tool '{tool}' on server '{server}' is not trusted",
             metadata={"mcp_server_name": str(server), "trust_required": True},
         )
-    if intent.runtime_mode != "test" and not has_mcp_consent(project_root, str(server)):
+    if intent.runtime_mode != "test" and not explicitly_simulated and not has_mcp_consent(project_root, str(server)):
         return ToolResult(
             run_id=intent.run_id,
             tool_call_id=intent.tool_call_id,
@@ -40,8 +51,7 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
             error=f"MCP server '{server}' requires explicit consent",
             metadata={"mcp_server_name": str(server), "consent_required": True},
         )
-    config = resolve_mcp_server(project_root, server_name)
-    if config is not None and (intent.runtime_mode != "test" or mcp_trust_record(project_root, server_name) is not None):
+    if config is not None and mcp_trust_record(project_root, server_name) is not None and not explicitly_simulated:
         trust_record = mcp_trust_record(project_root, server_name)
         if trust_record is None:
             return ToolResult(
@@ -89,6 +99,15 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
             output_digest=digest,
             metadata=metadata,
         )
+    if config is not None and not explicitly_simulated:
+        return ToolResult(
+            run_id=intent.run_id,
+            tool_call_id=intent.tool_call_id,
+            tool_name=intent.tool_name,
+            status="error",
+            error=f"MCP server '{server_name}' has no trusted tool fingerprint",
+            metadata={"mcp_server_name": server_name, "trust_required": True},
+        )
     payload = {
         "server": server,
         "tool": tool,
@@ -114,6 +133,8 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
             "mcp_tool_name": str(tool),
             "mcp_tool_schema_hash": "sha256:" + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest(),
             "mcp_risk_level": "medium",
+            "mcp_execution_mode": "simulated",
+            "mcp_simulation_explicit": explicitly_simulated,
             "mcp_sandbox_profile": mcp_sandbox_profile(project_root, str(server)) if intent.runtime_mode != "test" else "test",
         },
     )

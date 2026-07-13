@@ -61,6 +61,40 @@ def test_real_mcp_stdio_call_requires_trusted_surface_and_returns_structured_res
     assert result.metadata["mcp_tool_schema_hash"].startswith("sha256:")
 
 
+def test_mcp_without_configuration_returns_an_error_outside_test_mode(tmp_path: Path) -> None:
+    intent = ToolIntent(
+        run_id="run_mcp",
+        tool_call_id="call_001",
+        tool_name="mcp_tool",
+        arguments={"server": "missing", "tool": "echo", "input": {}},
+        source="test",
+        runtime_mode="noninteractive",
+    )
+
+    result = ToolGateway().execute(intent, tmp_path)
+
+    assert result.status == "error"
+    assert result.metadata["mcp_config_required"] is True
+    assert "configuration was not found" in (result.error or "")
+
+
+def test_explicitly_simulated_mcp_call_is_marked_in_evidence_metadata(tmp_path: Path) -> None:
+    intent = ToolIntent(
+        run_id="run_mcp",
+        tool_call_id="call_001",
+        tool_name="mcp_tool",
+        arguments={"server": "simulated", "tool": "echo", "input": {}, "simulated": True},
+        source="test",
+        runtime_mode="interactive",
+    )
+
+    result = ToolGateway().execute(intent, tmp_path)
+
+    assert result.status == "ok"
+    assert result.metadata["mcp_execution_mode"] == "simulated"
+    assert result.metadata["mcp_simulation_explicit"] is True
+
+
 def test_schema_drift_marks_existing_mcp_trust_stale_and_blocks_call(tmp_path: Path) -> None:
     _write_server_config(tmp_path)
     _trust_fake_server(tmp_path)
