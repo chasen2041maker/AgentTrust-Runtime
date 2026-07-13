@@ -28,6 +28,7 @@ from agenttrust.runtime.recovery import restore_run
 from agenttrust.runtime.report import resolve_run_dir, timeline_lines, write_html_report, write_markdown_report
 from agenttrust.runtime.trace import verify_trace
 from agenttrust.adapters.evidence.export import export_ndjson
+from agenttrust.adapters.evidence.otel import export_otel_trace
 from agenttrust.interfaces.python_api import AgentTrustRuntime
 from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
@@ -96,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_verify.add_argument("run_id")
     evidence_export = evidence_subparsers.add_parser("export", help="Export run evidence as NDJSON.")
     evidence_export.add_argument("run_id")
+    evidence_otel = evidence_subparsers.add_parser("export-otel", help="Export run evidence to an OTLP HTTP endpoint.")
+    evidence_otel.add_argument("run_id")
+    evidence_otel.add_argument("--endpoint", required=True)
 
     state_parser = subparsers.add_parser("state", help="Derived SQLite state helpers.")
     state_subparsers = state_parser.add_subparsers(dest="state_command", required=True)
@@ -282,6 +286,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "evidence" and args.evidence_command == "export":
         print(export_ndjson(resolve_run_dir(project_root, args.run_id)))
+        return 0
+
+    if args.command == "evidence" and args.evidence_command == "export-otel":
+        try:
+            count = export_otel_trace(resolve_run_dir(project_root, args.run_id), endpoint=args.endpoint)
+        except (RuntimeError, ValueError) as exc:
+            print(f"OpenTelemetry export failed: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps({"spans_exported": count}, ensure_ascii=False))
         return 0
 
     if args.command == "state" and args.state_command == "rebuild":
