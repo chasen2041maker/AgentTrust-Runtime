@@ -8,6 +8,8 @@ AgentTrust Runtime is a local-first governance layer for AI agent tool execution
 - [CLI reference](cli.md): commands grouped by workflow.
 - [Core concepts](concepts.md): the objects and decisions that make up the runtime.
 - [Architecture](ARCHITECTURE.md): module boundaries and control flow.
+- [Enterprise architecture upgrade](enterprise-architecture.md): target layered architecture and control matrix.
+- [Refactor roadmap](refactor-roadmap.md): phased code-architecture migration plan.
 - [Threat model](THREAT_MODEL.md): covered controls, non-goals, and residual risk.
 - [Related work and scope](RELATED_WORK.md): where AgentTrust fits next to governance, tracing, and fact-gate tools.
 - [Changelog](../CHANGELOG.md): notable changes.

@@ -253,6 +253,8 @@ AgentTrust 不是 GroundGuard 的替代品；它是 GroundGuard 前面的 runtim
 - [CLI reference](docs/cli.md)
 - [Core concepts](docs/concepts.md)
 - [Architecture](docs/ARCHITECTURE.md)
+- [Enterprise architecture upgrade](docs/enterprise-architecture.md)
+- [Refactor roadmap](docs/refactor-roadmap.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Related work and scope](docs/RELATED_WORK.md)
 - [Changelog](CHANGELOG.md)

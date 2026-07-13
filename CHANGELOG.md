@@ -6,6 +6,7 @@ All notable changes to AgentTrust Runtime are documented here.
 
 ### Added
 
+- Enterprise architecture upgrade plan and phased refactor roadmap.
 - Core local-first runtime path:
   - `ToolIntent` / `ToolResult`
   - Permission Engine
