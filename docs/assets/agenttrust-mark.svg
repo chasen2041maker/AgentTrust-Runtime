@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240" role="img" aria-labelledby="title desc">
+  <title id="title">AgentTrust Runtime mark</title>
+  <desc id="desc">A shield enclosing a check-mark and a linked evidence trail.</desc>
+  <rect width="240" height="240" rx="44" fill="#F8FAFC"/>
+  <path d="M120 25 193 52v55c0 48-28 82-73 105-45-23-73-57-73-105V52l73-27Z" fill="#0F766E"/>
+  <path d="M120 42 177 63v44c0 37-20 66-57 87-37-21-57-50-57-87V63l57-21Z" fill="#ECFDF5"/>
+  <path d="m82 119 24 24 52-59" fill="none" stroke="#0F766E" stroke-linecap="round" stroke-linejoin="round" stroke-width="14"/>
+  <circle cx="67" cy="179" r="10" fill="#F59E0B"/>
+  <circle cx="101" cy="194" r="10" fill="#F59E0B"/>
+  <circle cx="139" cy="194" r="10" fill="#F59E0B"/>
+  <path d="M75 181h18m18 13h18" fill="none" stroke="#F59E0B" stroke-linecap="round" stroke-width="6"/>
+</svg>

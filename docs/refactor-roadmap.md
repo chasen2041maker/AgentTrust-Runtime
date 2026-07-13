@@ -32,7 +32,7 @@
 ### v0.5.0 可观测性与安全基准
 
 - JSONL evidence 到 OpenTelemetry/OTLP 的重建 exporter。
-- `security-v1` 公开 100 例确定性安全基准，包含聚合误报、漏报与 latency 指标。
+- `security-v1` 公开 107 个确定性控制检查（100 个攻击案例与 7 个安全基线），包含聚合误报、漏报与 latency 指标。
 
 ### v0.5.1 安全正确性
 

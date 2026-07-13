@@ -73,10 +73,10 @@ agenttrust mcp consent revoke <server>
 
 `discover` 和 `inspect` 只静态读取 Claude Code、Codex、Cursor、VS Code 与项目范围的配置；输出只列出环境变量 key。`trust` 在发现的真实 server 上先要求 consent，再使用 `tools/list` 保存允许工具的 command/schema 指纹。漂移会变成 `trust_stale` 并拒绝工具调用。
 
-## 安全基准
+## Security Regression Suite
 
 ```powershell
 agenttrust benchmark security --output benchmark-report.json
 ```
 
-命令运行公开的 `security-v1` 100 例数据集，输出逐例结果和聚合安全指标。当出现 false negative 或 critical bypass 时退出码为 `2`。
+命令运行公开的 `security-v1` 107 个确定性控制检查：100 个预期拦截攻击用例和 7 个预期允许基线。它输出逐例结果和聚合安全指标；当出现 false negative 或 critical bypass 时退出码为 `2`。

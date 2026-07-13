@@ -28,7 +28,7 @@ JSONL 是运行期 append-only、可独立验证的 evidence 源；SQLite 只是
 | 事实矛盾或缺失 | GroundGuard fact check | `groundguard-report.json` |
 | 越界恢复 | target/backup path constraints | restore trace |
 
-`security-v1` 把其中七类控制编成 100 个公开确定性测试样例，详见 [安全基准](../benchmarks/README.md)。
+`security-v1` 把其中七类控制编成 107 个公开确定性检查：100 个预期拦截攻击用例和 7 个预期允许基线，详见 [Security Regression Suite](../benchmarks/README.md)。
 
 ## 关键安全不变量
 

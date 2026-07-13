@@ -12,7 +12,7 @@ AgentTrust Runtime 是本地优先的 Agent 工具执行控制层：它为现有
 - [相关工作与边界](RELATED_WORK.md)：项目定位与刻意不做的内容。
 - [架构演进方案](enterprise-architecture.md)：已落地能力与下一阶段边界。
 - [重构路线图](refactor-roadmap.md)：架构迁移的完成状态。
-- [安全基准](../benchmarks/README.md)：公开的 100 例确定性攻击数据集。
+- [Security Regression Suite](../benchmarks/README.md)：公开的 107 个确定性控制检查（100 个攻击用例与 7 个安全基线）。
 - [变更记录](../CHANGELOG.md)：版本演进。
 - [贡献指南](../CONTRIBUTING.md) 与 [安全策略](../SECURITY.md)。
 
@@ -23,4 +23,4 @@ AgentTrust Runtime 是本地优先的 Agent 工具执行控制层：它为现有
 3. JSONL 是证据源，SQLite 可从已验证 trace 重建。
 4. MCP config 的 inspect 不启动 server；真实调用需要 consent、tool trust 和未漂移的 fingerprint。
 5. OpenTelemetry 从 evidence 重建 span；项目不托管 Dashboard。
-6. `security-v1` 用 100 个确定性攻击用例回归上述控制。
+6. `security-v1` 用 107 个确定性控制检查（100 个预期拦截与 7 个预期允许）回归上述控制。

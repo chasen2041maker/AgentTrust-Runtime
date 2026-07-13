@@ -1,75 +1,93 @@
-<div align="center">
+<p align="center">
+  <img src="docs/assets/agenttrust-mark.svg" width="104" alt="AgentTrust Runtime mark" />
+</p>
 
-# AgentTrust Runtime
+<h1 align="center">AgentTrust Runtime</h1>
 
-**本地优先、会话感知的 Agent 执行控制层。**
+<p align="center">
+  <strong>Policy, approvals, recovery, and verifiable evidence for AI agent tool calls.</strong>
+</p>
 
-在现有 Agent 框架与真实工具之间加入策略、可恢复审批、沙箱、可验证 evidence，以及 GroundGuard 最终答案核验。
+<p align="center">
+  Wrap OpenAI Agents, LangGraph, Pydantic AI, MCP, or custom Python tools with fail-closed local controls without replacing the agent framework.
+</p>
 
-[![CI](https://github.com/chasen2041maker/AgentTrust-Runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/chasen2041maker/AgentTrust-Runtime/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![Version](https://img.shields.io/badge/version-0.5.1-green)
-![License](https://img.shields.io/badge/license-MIT-green)
+<p align="center">
+  <a href="README.md">English</a> | <a href="README_zh.md">中文</a> | <a href="docs/index.md">Documentation</a> | <a href="CHANGELOG.md">Changelog</a> | <a href="SECURITY.md">Security</a> | <a href="docs/refactor-roadmap.md">Roadmap</a>
+</p>
 
-[快速开始](#快速开始) | [会话 API](#会话-api) | [MCP](#真实-mcp-网关) | [证据与可观测性](#证据与可观测性) | [安全基准](#安全基准) | [文档](#文档)
+<p align="center">
+  <a href="https://github.com/chasen2041maker/AgentTrust-Runtime/actions/workflows/ci.yml"><img src="https://github.com/chasen2041maker/AgentTrust-Runtime/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776AB" alt="Python 3.11 or newer" />
+  <img src="https://img.shields.io/badge/status-beta-F59E0B" alt="Beta status" />
+  <img src="https://img.shields.io/badge/license-MIT-0F766E" alt="MIT License" />
+</p>
 
-</div>
+<p align="center">
+  <img src="https://img.shields.io/badge/Policy-fail--closed-C2410C" alt="Fail-closed policy" />
+  <img src="https://img.shields.io/badge/Approvals-resumable-0369A1" alt="Resumable approvals" />
+  <img src="https://img.shields.io/badge/Evidence-hash--linked-7C3AED" alt="Hash-linked evidence" />
+  <img src="https://img.shields.io/badge/Recovery-governed%20writes-0F766E" alt="Governed write recovery" />
+  <img src="https://img.shields.io/badge/MCP-stdio%20%2B%20drift-D97706" alt="MCP stdio and drift controls" />
+</p>
 
-> **v0.5.1 Beta / 开发者预览**：适合本地开发、集成验证和确定性安全控制回归。它不是生产部署安全保证；接入真实系统前仍应完成独立威胁建模、权限配置审查和环境级防护。
+![AgentTrust Runtime control flow](docs/assets/runtime-flow.svg)
 
-## 它解决什么问题
+> **v0.5.1 Beta / developer preview.** AgentTrust is suitable for local development, integration validation, and deterministic control regression. It is not a production-security guarantee. Review permissions, perform threat modeling, and use environment-level safeguards before connecting real systems.
 
-AgentTrust 不负责规划 Agent，也不替代模型或工作流框架。它只负责在 Agent 想调用工具时，回答并留下证据：
+## What is AgentTrust?
 
-1. 这次调用是否被策略允许，是否需要人工批准？
-2. 参数是否越过了文件、MCP 或恢复边界？
-3. 这次调用属于哪个用户、Agent、会话和策略快照？
-4. 程序重启后，等待批准的调用能否以原始参数安全恢复？
-5. 最终答案是否引用了同一会话中记录的事实？
+An agent framework decides what it wants to do. AgentTrust governs what happens when that decision reaches a real tool.
 
-它把这些问题收拢为一个本地、可审计的闭环：
+For each tool call, it answers and records:
 
-```text
-Agent framework / custom loop
-          -> AgentTrust Session
-          -> policy -> approval -> sandbox -> tool
-          -> JSONL evidence + SQLite state + facts
-          -> GroundGuard final-answer check
-          -> replay / restore / OpenTelemetry export
-```
+1. Is the call allowed, denied, or waiting for human approval?
+2. Do its paths, command arguments, MCP trust state, and recovery boundaries pass control checks?
+3. Which actor, session, policy snapshot, and arguments produced the result?
+4. Can a paused, approved call be replayed with the original arguments after a restart?
+5. Does the final answer cite facts recorded in the same session?
 
-## 快速开始
+It is intentionally a control layer, not an agent planner, model provider, workflow engine, dashboard, or cloud policy service.
+
+## 30-second proof
+
+The package is not published to PyPI yet. Install the current beta directly from this repository, then run a deterministic session that creates evidence, facts, a GroundGuard report, and an HTML report.
 
 ```powershell
-git clone https://github.com/chasen2041maker/AgentTrust-Runtime.git
-cd AgentTrust-Runtime
-python -m pip install -e ".[test]"
+python -m pip install "agenttrust-runtime @ git+https://github.com/chasen2041maker/AgentTrust-Runtime.git"
+mkdir agenttrust-demo
+cd agenttrust-demo
 agenttrust init
-python -m pytest
-```
-
-初始化后，运行一次确定性示例并校验证据链：
-
-```powershell
 agenttrust run-fixture verified_answer --mode test
 agenttrust evidence verify <run_id>
 agenttrust report <run_id> --format html
 ```
 
-每个 run 都会在 `.agenttrust/runs/{run_id}/` 下保留 `trace.jsonl` 与 `policy-snapshot.yaml`。按执行路径还会生成：
+Expected evidence verification:
 
 ```text
-trace.jsonl             # 运行期 append-only、hash-linked evidence
-facts.jsonl             # 有工具事实时生成的结构化账本
-policy-snapshot.yaml    # 本次运行实际使用的策略
-approvals.jsonl         # 有审批请求时生成
-groundguard-report.json # 调用 finalize_answer() 后生成
-report.md / report.html # 执行 agenttrust report 后生成
+{
+  "valid": true,
+  "event_count": 11,
+  "head_hash": "sha256:..."
+}
 ```
 
-## 会话 API
+The run directory contains the artifacts that actually occurred on that path:
 
-一个 `AgentTrustSession` 让多次工具调用共享同一个 `run_id`、身份、策略快照、事实账本和证据链。
+```text
+trace.jsonl             # Local, append-oriented, hash-linked event source
+policy-snapshot.yaml    # Exact policy text used for the run
+facts.jsonl             # Structured facts mapped from tool results, when present
+groundguard-report.json # Final-answer verification result, when finalized
+report.md / report.html # Generated from the verified run timeline
+```
+
+`trace.jsonl` detects modifications inside its hash chain. It is not externally signed, immutable storage, or a non-repudiation system.
+
+## First governed session
+
+Use an `AgentTrustSession` inside an existing agent loop. This example pauses a code write for approval instead of executing it immediately.
 
 ```python
 from pathlib import Path
@@ -78,81 +96,83 @@ from agenttrust import AgentTrustRuntime
 
 runtime = AgentTrustRuntime(Path("."), runtime_mode="interactive")
 
-with runtime.session(actor_id="alice", agent_id="research-agent") as session:
-    first = session.execute("read_file", {"path": "README.md"})
-    second = session.execute("git_diff", {})
-    lines = first.outcome.result.metadata["lines"]
-    result = session.finalize_answer(
-        f"README has {lines} lines [fact:read_file_lines].",
-        required_fact_keys=["read_file_lines"],
+with runtime.session(actor_id="alice", agent_id="coding-agent") as session:
+    outcome = session.execute(
+        "write_file",
+        {"path": "src/report.py", "content": "print('hello')\n"},
     )
+
+    if outcome.approval_request:
+        print("Approval required:", outcome.approval_request.approval_id)
+        print("Evidence:", session.run_dir / "trace.jsonl")
 ```
 
-会话具有 `running`、`waiting_approval`、`completed`、`failed` 和 `cancelled` 等显式状态。工具调用需要批准时会暂停，而不是把整个 run 当作失败处理。
+Approve and resume the same call with its argument digest still bound to the approval record:
 
 ```powershell
 agenttrust approvals list
 agenttrust approvals inspect <approval_id>
 agenttrust approvals approve <approval_id> --reason "reviewed"
 agenttrust run resume <run_id>
-agenttrust run cancel <run_id>
-agenttrust state rebuild
 ```
 
-审批请求绑定 `arguments_digest`。恢复和审批决策先校验 hash chain，再从已验证 trace 回放会话、工具调用、审批与事实；SQLite 只承担可重建的查询投影。恢复还会校验策略快照摘要、审批有效期和原始参数摘要，防止“批准安全参数后再偷偷换参数”。
+For development installation and test commands, see [Contributing](CONTRIBUTING.md).
 
-进程重启后恢复 `govern()` 包裹的自定义工具时，需要重新创建包装器并传给 `resume_tools`，使处理器显式回注册：
+## Why AgentTrust?
 
-```python
-with runtime.resume(run_id, resume_tools=[safe_send_email]) as session:
-    session.resume_pending_approval()
-```
+| Capability | Prompt guardrail | Observability | Sandbox | AgentTrust |
+| --- | --- | --- | --- | --- |
+| Policy before tool execution | Limited | No | Sometimes | Yes |
+| Human approval | Limited | No | No | Resumable |
+| Path and tool controls | No | No | Yes | Yes |
+| Evidence | No | Trace only | No | Hash-linked local JSONL |
+| Restore governed writes | No | No | Snapshot-dependent | Verified run artifacts |
+| Final-answer fact check | No | No | No | GroundGuard-backed |
+| Replaces an agent framework | No | No | No | No |
 
-## 一行接入现有工具
+The comparison describes scope, not a claim that any single category covers every deployment risk.
 
-普通同步 Python 函数可以直接被治理。默认效果必须显式声明，且函数参数必须可 JSON 序列化。
+## Product highlights
 
-```python
-from pathlib import Path
+| Policy gate | Resumable approvals | Path and tool controls |
+| --- | --- | --- |
+| Every tool call evaluates to `allow`, `ask`, or `deny`; unknown tools fail closed. [Concepts](docs/concepts.md) | Pause a session, decide later, and resume the original arguments after verified replay. [CLI](docs/cli.md) | Govern local files, safe shell argv, MCP calls, and custom Python functions. [Architecture](docs/ARCHITECTURE.md) |
 
-from agenttrust import AgentTrustRuntime, govern
+| Evidence and replay | Recoverable writes | Final-answer verification |
+| --- | --- | --- |
+| Store a local hash-linked trace, rebuild SQLite projections, and export spans. [Evidence](docs/concepts.md) | Back up governed file writes and restore through a verified trace. [Recovery](docs/cli.md) | Check required answer claims against facts from the same session. [GroundGuard](docs/concepts.md) |
 
-def send_email(to: str, body: str) -> str:
-    return f"sent to {to}"
+## How it works
 
-runtime = AgentTrustRuntime(Path("."), runtime_mode="test")
-with runtime.session(actor_id="alice") as session:
-    safe_send_email = govern(send_email, session=session, default_effect="ask")
-    print(safe_send_email("ops@example.com", "Deployment complete"))
-```
+1. Normalize a framework callback, MCP request, or custom callable into a `ToolIntent`.
+2. Evaluate policy and registered-tool defaults. Unregistered tools fail closed.
+3. Validate file paths, safe shell `argv`, or MCP consent, trust, and command/schema fingerprints.
+4. Persist an approval request if the decision is `ask`; otherwise run the governed tool.
+5. Append lifecycle events, map facts, and project query state into SQLite.
+6. Replay verified evidence for recovery, reporting, OpenTelemetry export, and final-answer verification.
 
-也可使用 `@governed_tool(...)`。`ask` 在非交互模式默认收紧为 `deny`；`test` 模式使用确定性的 mock approver，专门服务于 CI。
+The evidence path is shown separately because SQLite is a rebuildable projection, not the source of truth for a resumed run.
 
-## 框架集成
+## Integrations
 
-支持三个小而明确的集成包，并且它们重用调用方创建的 session，不会每次包裹工具时新建 run：
+AgentTrust keeps the caller's session rather than making a new run for every wrapped tool.
 
-- `agenttrust.integrations.openai_agents`
-- `agenttrust.integrations.langgraph`
-- `agenttrust.integrations.pydantic_ai`
+| Integration | Entry point | Runnable example |
+| --- | --- | --- |
+| OpenAI Agents SDK | `agenttrust.integrations.openai_agents` | `python examples/openai_agents_sdk_adapter.py` |
+| LangGraph | `agenttrust.integrations.langgraph` | `python examples/langgraph_tool_adapter.py` |
+| Pydantic AI | `agenttrust.integrations.pydantic_ai` | `python examples/pydantic_ai_adapter.py` |
+| Custom Python | `govern()` / `@governed_tool(...)` | [Session API](#first-governed-session) |
 
-三个示例无需 API key 或框架安装即可运行，采用 fake-model 路径验证会话复用：
+The examples use fake-model paths and require no API key. Install framework extras only when using their native objects: `.[openai]`, `.[langgraph]`, or `.[pydantic-ai]`.
 
-```powershell
-python examples/openai_agents_sdk_adapter.py
-python examples/langgraph_tool_adapter.py
-python examples/pydantic_ai_adapter.py
-```
+## Local MCP stdio governance
 
-需要原生框架对象时，分别安装独立 extra：`.[openai]`、`.[langgraph]` 或 `.[pydantic-ai]`。
-
-## 真实 MCP 网关
-
-AgentTrust 支持本地 stdio MCP，不把 config inspect 和 server 启动混为一谈：
+AgentTrust separates reading an MCP configuration from starting a server:
 
 ```text
-静态发现 -> inspect -> 显式 consent -> tools/list -> tool trust
--> command/schema fingerprint -> tools/call -> evidence
+static discovery -> inspect -> explicit consent -> tools/list -> tool trust
+-> command and schema fingerprint -> tools/call -> evidence
 ```
 
 ```powershell
@@ -160,76 +180,113 @@ agenttrust mcp discover
 agenttrust mcp inspect <server-or-config>
 agenttrust mcp consent grant <server>
 agenttrust mcp trust <server> --tool read_file
-agenttrust mcp consent revoke <server>
 ```
 
-- `discover` 与 `inspect` 只读取配置，不启动 server，也不输出环境变量值。
-- 真实调用前必须有 server consent 与 tool-level trust。
-- 信任记录包含 command、description 和 input schema 的 hash；任一漂移都会把状态降为 `trust_stale`，后续调用被拒绝。
-- interactive 与 noninteractive 模式下，未找到 MCP 配置会返回错误，不会降级为成功的 mock；模拟仅在 test 模式或显式 `simulated: true` 时启用，并写入结果元数据。
-- stdio、超时和协议异常以结构化 `ToolResult` 和 evidence 记录，而非静默失败。
+- Discovery and inspection do not start the server or print environment-variable values.
+- Real calls require both server consent and tool-level trust.
+- Command, description, and input-schema drift invalidate trust and block subsequent calls.
+- A missing config fails outside test mode unless the request is explicitly simulated.
+- Sandbox profiles are policy metadata today; they are **not** OS-level process or network isolation.
 
-## 证据与可观测性
+## Evidence, recovery, and reports
 
-JSONL 是本地 hash-linked evidence 源，SQLite 是可查询、可重建的状态投影。恢复、恢复文件和 OTel 导出都会先验证 trace；即使 `state.db` 丢失，也可从已验证 trace 重建。
+![Example evidence report](docs/assets/evidence-report-preview.svg)
+
+Evidence events are append-oriented JSONL records with previous-event hashes. `agenttrust evidence verify` validates a trace before replay, restore, or OpenTelemetry export. `agenttrust state rebuild` can reconstruct the local SQLite projection from verified traces.
+
+For a governed `write_file`, the runtime keeps a run-local backup and validates recovery paths and backup digests. Restoration is file-oriented, should be reviewed, and is not a transaction system for arbitrary side effects.
 
 ```powershell
 agenttrust evidence verify <run_id>
 agenttrust evidence export <run_id>
 agenttrust state rebuild
+agenttrust restore <run_id> --dry-run
+agenttrust report <run_id> --format html
 ```
 
-安装 OTel extra 后，既有 evidence 可以重建为标准 span 并发送到任意 OTLP HTTP 后端：
+Install `.[otel]` to rebuild evidence as OTLP HTTP spans for a backend such as Phoenix, Jaeger, Tempo, or Langfuse. AgentTrust does not ship a dashboard.
 
-```powershell
-python -m pip install -e ".[otel]"
-agenttrust evidence export-otel <run_id> --endpoint http://localhost:4318/v1/traces
+## Final-answer verification
+
+`finalize_answer()` records a final answer and checks requested fact keys against facts produced in the current session. This adds a checkable link between a tool result and a claim; it does not prove the completeness or truth of arbitrary model output.
+
+```python
+result = session.finalize_answer(
+    "Revenue was $3.83 billion [fact:revenue].",
+    required_fact_keys=["revenue"],
+)
+assert result.status == "verified"
 ```
 
-span 层级为 `agenttrust.session -> agenttrust.tool -> policy / approval / sandbox / execute`，最终答案路径为 `agenttrust.final_answer -> agenttrust.groundguard`。项目不内置 Dashboard；Phoenix、Jaeger、Tempo、Langfuse 等 OTLP 后端是更合适的显示层。
+## Security regression suite
 
-## 安全基准
-
-`security-v1` 是公开、确定性、可复现的 100 例安全控制回归套件。运行时不会执行攻击 shell 命令，也不会启动用户配置的 MCP server；首个 MCP drift 用例只启动项目内置的 fake stdio server，以验证真实 fingerprint 路径。它用于比较版本间的固定控制行为，不替代渗透测试、真实环境评估或生产安全结论。
+`security-v1` is a public deterministic control regression suite, not a penetration test or a claim of complete coverage against arbitrary agent attacks. It does not execute supplied shell commands or user-configured MCP servers; its first drift case starts only the packaged fake stdio server.
 
 ```powershell
 agenttrust benchmark security --output benchmark-report.json
 ```
 
-报告包含逐例 ID、期望与实际拦截结果，以及：
+An execution on the v0.5.1 codebase produced:
 
-- `cases_total`、`expected_blocks`、`detected_blocks`
-- `false_positives`、`false_negatives`、`critical_bypasses`
-- `median_policy_latency_ms`
+```text
+107 deterministic checks
+100 expected blocks / 100 detected blocks
+7 expected-allow baselines
+0 false positives / 0 false negatives / 0 critical bypasses
+```
 
-数据集覆盖 20 个路径逃逸、10 个秘密访问、20 个 shell 注入、15 个审批绕过、15 个 MCP trust/drift、10 个恢复篡改和 10 个事实矛盾攻击样例，并附带 7 个预期允许的基线，以测量误报。完整说明见 [安全基准](benchmarks/README.md)。
+The JSON result includes case IDs, expected and observed outcomes, category counts, and policy latency. Reproduce it with the command above; performance depends on your Python and operating-system environment. The public case definitions and limitations are in [the benchmark guide](benchmarks/README.md).
 
-## 安全默认值
+## Use cases
 
-- 未注册工具在权限阶段 fail closed。
-- `shell` 默认 `ask`，安全执行只接受 `argv` 并使用 `shell=False`；兼容危险模式必须明确使用 `unsafe_shell_command`。
-- `PathSandbox` 限制读写在 `project_root` 内，阻断 `.env`、PEM、SSH 和系统路径。
-- `ask` 在 noninteractive 模式变成 `deny`；审批记录不等于自动批准。
-- 本地 artifact 可能包含路径、工具输出和业务事实，分享前必须脱敏。
+**Coding agents**: require review before source writes or shell execution, then retain recovery artifacts.
 
-## 不做什么
+**Local MCP clients**: apply explicit consent, per-tool trust, and schema-drift checks to local servers.
 
-AgentTrust 有意保持窄而硬的边界：不做 Agent 编排框架、Web Dashboard、云端 policy server、用户/组织系统、多语言 SDK、远程 memory service、skill marketplace 或完整 SIEM。它的价值在于让现有 Agent 的工具执行更可控、更可恢复、更能证明发生过什么。
+**Research and data agents**: retain tool-produced facts and check final reports against them.
 
-## 文档
+**Regulated or audited workflows**: keep actor, session, policy, approval, tool-result, and final-answer evidence together.
 
-- [入门](docs/getting-started.md)
-- [CLI 参考](docs/cli.md)
-- [核心概念](docs/concepts.md)
-- [运行时架构](docs/ARCHITECTURE.md)
-- [威胁模型](docs/THREAT_MODEL.md)
-- [相关工作与边界](docs/RELATED_WORK.md)
-- [架构演进方案](docs/enterprise-architecture.md)
-- [重构路线图](docs/refactor-roadmap.md)
-- [变更记录](CHANGELOG.md)
-- [安全策略](SECURITY.md)
-- [贡献指南](CONTRIBUTING.md)
+## Project status and limitations
+
+**Status: Beta.** The runtime has production-shaped local controls, but it is still a developer preview.
+
+Available now:
+
+- Session-scoped execution, persisted approval records, and replay from verified local evidence.
+- Local MCP stdio consent, tool trust, and drift checks.
+- Hash-linked evidence, SQLite projection rebuild, report generation, and OTLP export.
+- GroundGuard-backed checks for required facts in a final answer.
+
+Known limitations:
+
+- Local evidence has no external signature, trusted timestamp, or immutable storage anchor.
+- Runtime session serialization is in-process; do not resume the same run from multiple processes.
+- Custom functions wrapped with `govern()` must be registered again after a restart before resume.
+- Approval expiry is enforced when an expiry exists, but a configurable default approval TTL is not yet available.
+- MCP sandbox profiles do not enforce OS-level process or network isolation.
+- File restoration is not a general-purpose transaction or rollback mechanism.
+
+## Roadmap
+
+The next reliability work focuses on cross-process run coordination, configurable approval lifetimes, stronger evidence anchoring, successful-write recovery binding, and OS-level MCP isolation. The broader implementation history and planned boundaries are in the [architecture roadmap](docs/refactor-roadmap.md) and [enterprise architecture](docs/enterprise-architecture.md).
+
+## Documentation
+
+- [Getting started](docs/getting-started.md)
+- [CLI reference](docs/cli.md)
+- [Core concepts](docs/concepts.md)
+- [Runtime architecture](docs/ARCHITECTURE.md)
+- [Threat model](docs/THREAT_MODEL.md)
+- [Related work and boundaries](docs/RELATED_WORK.md)
+- [Benchmark guide](benchmarks/README.md)
+- [Changelog](CHANGELOG.md)
+- [Security policy](SECURITY.md)
+
+## Community and contributing
+
+Contributions are welcome when they strengthen a concrete, deterministic runtime control. Start with [CONTRIBUTING.md](CONTRIBUTING.md), open an issue with a focused reproduction, and report potential security vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-MIT License.
+[MIT](LICENSE)

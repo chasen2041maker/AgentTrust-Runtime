@@ -76,5 +76,5 @@ agenttrust run resume <run_id>
 
 - 阅读 [CLI 参考](cli.md) 获取全部命令。
 - 阅读 [运行时架构](ARCHITECTURE.md) 了解控制路径与模块边界。
-- 按 [README](../README.md#框架集成) 接入 OpenAI Agents、LangGraph 或 Pydantic AI。
-- 用 [安全基准](../benchmarks/README.md) 检查本地运行环境中的 100 条控制样例。
+- 按[中文 README](../README_zh.md#集成)接入 OpenAI Agents、LangGraph 或 Pydantic AI。
+- 用 [Security Regression Suite](../benchmarks/README.md) 检查本地运行环境中的 107 个确定性控制检查。

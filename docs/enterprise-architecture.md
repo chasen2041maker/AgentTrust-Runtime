@@ -51,7 +51,7 @@ flowchart TB
 | evidence | hash-linked JSONL、state rebuild | tamper/rebuild tests |
 | 可观测性 | OTel 从 evidence 重建 span | in-memory exporter test |
 | 最终答案 | GroundGuard 与 session facts 绑定 | final-answer tests |
-| 安全回归 | 100 个公开确定性攻击案例 | benchmark CLI/test |
+| 安全回归 | 107 个公开确定性控制检查（100 个攻击案例与 7 个安全基线） | benchmark CLI/test |
 
 ## 有意延后
 

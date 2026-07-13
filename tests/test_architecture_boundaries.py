@@ -40,6 +40,7 @@ ALLOWED_IMPORT_ROOTS = {
     "fnmatch",
     "hashlib",
     "json",
+    "shlex",
     "typing",
     "uuid",
     "agenttrust",

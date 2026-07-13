@@ -36,6 +36,6 @@
 
 MCP server 的 consent 与 tool trust 分开保存。真实 trust 保存 command hash、工具描述 hash 与输入 schema hash；后续发现任何漂移，状态变为 `trust_stale`。静态 `discover`/`inspect` 不启动 server。
 
-## OTel 与安全基准
+## OTel 与 Security Regression Suite
 
-OpenTelemetry exporter 只从 evidence 重建 span，不引入第二套运行事实。`security-v1` 将路径、秘密、shell、审批、MCP、篡改与事实控制编为 100 条确定性基准，报告列出每例结果与误报/漏报指标。
+OpenTelemetry exporter 只从 evidence 重建 span，不引入第二套运行事实。`security-v1` 将路径、秘密、shell、审批、MCP、篡改与事实控制编为 107 个确定性检查：100 个预期拦截攻击用例和 7 个预期允许基线。报告列出每例结果与误报/漏报指标。

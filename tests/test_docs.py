@@ -47,17 +47,32 @@ def test_enterprise_architecture_cites_reference_sources() -> None:
 def test_release_metadata_and_readme_describe_the_current_runtime() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     readme = _read("README.md")
+    readme_zh = _read("README_zh.md")
 
     assert project["project"]["version"] == "0.5.1"
     assert agenttrust.__version__ == "0.5.1"
     for marker in (
         "AgentTrustSession",
-        "真实 MCP 网关",
+        "Local MCP stdio governance",
         "OpenTelemetry",
         "security-v1",
-        "100 例",
+        "107 deterministic checks",
         "agenttrust benchmark security",
     ):
         assert marker in readme
-    assert "Beta / 开发者预览" in readme
+    for marker in (
+        "为 AI Agent 的每一次工具调用增加策略、审批、恢复和可验证证据。",
+        "本地 MCP stdio 治理",
+        "107 个确定性检查",
+        "Beta / 开发者预览",
+    ):
+        assert marker in readme_zh
     assert "36 passed" not in readme
+
+
+def test_readmes_link_to_the_declared_license() -> None:
+    license_text = _read("LICENSE")
+
+    assert license_text.startswith("MIT License")
+    for relative_path in ("README.md", "README_zh.md"):
+        assert "[MIT](LICENSE)" in _read(relative_path)

@@ -1,6 +1,6 @@
-# AgentTrust Security Benchmark
+# AgentTrust Security Control Regression Suite
 
-`security-v1` is a deterministic, local 100-case adversarial benchmark. It never runs a supplied shell command or a user-configured MCP server. Its first drift case launches only a packaged fake stdio server to exercise the real fingerprint check. Scratch artifacts are kept under `.agenttrust/benchmarks/security-v1/` by default.
+`security-v1` is a deterministic, local 107-check control regression suite: 100 expected-block attack cases and 7 expected-allow baselines. It never runs a supplied shell command or a user-configured MCP server. Its first drift case launches only a packaged fake stdio server to exercise the real fingerprint check. Scratch artifacts are kept under `.agenttrust/benchmarks/security-v1/` by default.
 
 It is a deterministic security-control regression suite, not a penetration test or a production-safety guarantee.
 
