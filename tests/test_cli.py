@@ -75,6 +75,11 @@ def test_evidence_verify_accepts_an_untampered_run(tmp_path: Path, monkeypatch, 
     assert main(["evidence", "verify", run_id]) == 0
     assert json.loads(capsys.readouterr().out)["valid"] is True
 
+    assert main(["evidence", "export", run_id]) == 0
+    export_path = Path(capsys.readouterr().out.strip())
+    assert export_path.exists()
+    assert json.loads(export_path.read_text(encoding="utf-8").splitlines()[0])["resource"] == "agenttrust.runtime"
+
 
 def test_report_writes_markdown(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)

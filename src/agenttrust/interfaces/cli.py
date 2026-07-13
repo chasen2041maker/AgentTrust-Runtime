@@ -16,6 +16,7 @@ from agenttrust.runtime.live import run_live
 from agenttrust.runtime.recovery import restore_run
 from agenttrust.runtime.report import resolve_run_dir, timeline_lines, write_html_report, write_markdown_report
 from agenttrust.runtime.trace import verify_trace
+from agenttrust.adapters.evidence.export import export_ndjson
 from agenttrust.skills_lite import ensure_demo_skill, list_skills, load_skill
 from agenttrust.tools.registry import get_tool_spec, list_tool_specs
 
@@ -74,6 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_subparsers = evidence_parser.add_subparsers(dest="evidence_command", required=True)
     evidence_verify = evidence_subparsers.add_parser("verify", help="Verify a run evidence hash chain.")
     evidence_verify.add_argument("run_id")
+    evidence_export = evidence_subparsers.add_parser("export", help="Export run evidence as NDJSON.")
+    evidence_export.add_argument("run_id")
 
     policy_parser = subparsers.add_parser("policy", help="Policy helpers.")
     policy_subparsers = policy_parser.add_subparsers(dest="policy_command", required=True)
@@ -212,6 +215,10 @@ def main(argv: list[str] | None = None) -> int:
         result = verify_trace(resolve_run_dir(project_root, args.run_id) / "trace.jsonl")
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["valid"] else 2
+
+    if args.command == "evidence" and args.evidence_command == "export":
+        print(export_ndjson(resolve_run_dir(project_root, args.run_id)))
+        return 0
 
     if args.command == "policy" and args.policy_command == "validate":
         policy_path = (project_root / args.path).resolve()
