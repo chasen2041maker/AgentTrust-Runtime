@@ -63,6 +63,8 @@ def build_context_pack(project_root: Path, skill: str | None = None, budget: int
     pack_path = out_dir / "context-pack.md"
     manifest_path = out_dir / "context-manifest.json"
     pack_path.write_text("\n".join(lines), encoding="utf-8")
+    run_summaries = memory.get("run_summaries")
+    run_summary_count = len(run_summaries) if isinstance(run_summaries, list) else 0
     manifest_path.write_text(
         json.dumps(
             {
@@ -72,7 +74,7 @@ def build_context_pack(project_root: Path, skill: str | None = None, budget: int
                 "included_skill": skill,
                 "included_memory_keys": _memory_keys(memory),
                 "included_tools": [str(spec["name"]) for spec in tool_specs],
-                "included_recent_run_summaries": len(memory.get("run_summaries", [])),
+                "included_recent_run_summaries": run_summary_count,
                 "policy_hash": "sha256:" + hashlib.sha256(policy_text.encode("utf-8")).hexdigest(),
             },
             ensure_ascii=False,

@@ -44,11 +44,13 @@ def write_markdown_report(run_dir: Path) -> Path:
     report_path = run_dir / "report.md"
     lines = ["# AgentTrust Run Report", ""]
     if coverage:
+        required_facts = coverage.get("required_fact_keys")
+        required_facts_text = ", ".join(str(item) for item in required_facts) if isinstance(required_facts, list) else ""
         lines.extend(
             [
                 "## GroundGuard Coverage",
                 f"- status: `{coverage.get('status')}`",
-                f"- required facts: `{', '.join(coverage.get('required_fact_keys', []))}`",
+                f"- required facts: `{required_facts_text}`",
                 "",
             ]
         )

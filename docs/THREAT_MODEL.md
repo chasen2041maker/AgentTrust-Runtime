@@ -46,7 +46,7 @@ AgentTrust Runtime protects local developer workflows where an agent can request
 - Skill tool-scope enforcement
 - `pre_tool` hooks that can deny before sandbox/execution
 - `write_file` backups and restore trace events
-- Append-only trace
+- Hash-linked evidence trace with independent verification
 - Structured fact verification
 - Deterministic context pack manifests
 
@@ -61,7 +61,7 @@ AgentTrust Runtime protects local developer workflows where an agent can request
 - No TUI
 - No full git worktree manager
 - No subagent/team orchestration
-- No tamper-evident hash chain
+- No remote or externally witnessed evidence ledger
 - No complete OWASP Agentic Top 10 coverage
 - No universal natural language fact checking
 

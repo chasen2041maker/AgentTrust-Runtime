@@ -212,9 +212,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "evidence" and args.evidence_command == "verify":
-        result = verify_trace(resolve_run_dir(project_root, args.run_id) / "trace.jsonl")
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["valid"] else 2
+        verification_result = verify_trace(resolve_run_dir(project_root, args.run_id) / "trace.jsonl")
+        print(json.dumps(verification_result, ensure_ascii=False, indent=2))
+        return 0 if verification_result["valid"] else 2
 
     if args.command == "evidence" and args.evidence_command == "export":
         print(export_ndjson(resolve_run_dir(project_root, args.run_id)))
@@ -295,8 +295,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.memory_command == "list":
             memory = list_memory(project_root)
             print(memory.get("project", ""), end="")
-            for decision in memory.get("decisions", []):
-                print(f"- {decision['text']}")
+            decisions = memory.get("decisions")
+            if isinstance(decisions, list):
+                for decision in decisions:
+                    if isinstance(decision, dict):
+                        print(f"- {decision.get('text', '')}")
             return 0
         if args.memory_command == "inspect":
             print(json.dumps(list_memory(project_root), ensure_ascii=False, indent=2))

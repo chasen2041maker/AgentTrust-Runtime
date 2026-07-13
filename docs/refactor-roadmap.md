@@ -69,7 +69,7 @@ Remaining architectural debt:
 - CLI directly invokes concrete helpers;
 - several concrete adapters still live under their original feature modules;
 - enterprise metadata such as actor/session/policy version is not yet modeled;
-- evidence is append-only but not tamper-evident.
+- evidence is append-only, hash-linked, and independently verifiable; it is not remotely witnessed.
 
 ## Target Package Map
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence
 
 from agenttrust.domain.decisions import PermissionDecision, SandboxDecision
 from agenttrust.domain.models import ToolIntent, ToolResult
@@ -12,7 +12,7 @@ from agenttrust.domain.models import ToolIntent, ToolResult
 class EvidenceRecord(Protocol):
     """A serializable record emitted by an adapter."""
 
-    def to_dict(self) -> dict[str, object]: ...
+    def to_dict(self) -> Mapping[str, object]: ...
 
 
 class EvidenceRecorderPort(Protocol):

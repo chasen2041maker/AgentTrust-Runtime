@@ -92,8 +92,8 @@ agenttrust report <run_id> --format html
 - `ToolIntent` / `ToolResult` schema：所有输入源都先规范化成同一种工具调用协议。
 - Permission Engine：支持 `allow`、`ask`、`deny`，并处理 interactive / noninteractive / test 三种模式。
 - Path Sandbox：限制读写在 `project_root` 内，阻止 `.env`、PEM、SSH key 和系统路径。
-- Tool Gateway：统一执行 `read_file`、`write_file`、`shell`、`git_diff`、`mcp_tool`、`skill_context`。
-- Append-only trace：每个 run 写入可复盘的 `trace.jsonl`。
+- Tool Gateway：统一执行 `read_file`、`write_file`、安全 `shell`、显式 `unsafe_shell_command`、`git_diff`、`mcp_tool`、`skill_context`。
+- Hash-linked trace：每个 run 写入可复盘、可独立校验的 `trace.jsonl`。
 - Fact Mapper：从显式 `AGENTTRUST_FACTS` block 和工具 metadata 映射结构化 facts。
 - GroundGuard adapter：优先调用真实 `groundguard.FactGate`，无法抽取 Lite 演示事实时回退到确定性 `[fact:key]` 校验。
 - Replay / Report：生成 timeline、Markdown report 和 HTML report。
@@ -242,7 +242,7 @@ AgentTrust 不是 GroundGuard 的替代品；它是 GroundGuard 前面的 runtim
 - 不是完整 coding assistant、TUI 或 git worktree manager。
 - 不是 tracing/observability dashboard。
 - 不是通用 hallucination detector。
-- 不承诺 tamper-evident hash chain。
+- 不提供远程托管或第三方信任服务；本地 evidence chain 可通过 `agenttrust evidence verify <run_id>` 校验。
 
 它刻意保持小而硬：只展示本地 Agent runtime 最关键的治理闭环。
 

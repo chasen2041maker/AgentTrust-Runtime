@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+from collections.abc import Mapping
+from typing import cast
 from uuid import uuid4
 
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
@@ -15,7 +17,7 @@ from agenttrust.adapters.sandbox.filesystem import PathSandbox
 from agenttrust.adapters.tools.gateway import ToolGateway
 from agenttrust.application.run_tool import RunToolUseCase
 from agenttrust.context_lite import build_context_pack, export_context_to_run
-from agenttrust.adapters.verification.mapper import map_tool_result, write_facts
+from agenttrust.adapters.verification.mapper import Fact, map_tool_result, write_facts
 from agenttrust.groundguard_adapter import verify_answer, write_coverage_report
 from agenttrust.memory_lite import add_memory, append_run_summary, list_memory
 from agenttrust.permissions import (
@@ -246,8 +248,8 @@ def run_fixture(
     sandbox = PathSandbox(project_root)
     facts_path = run_dir / "facts.jsonl"
     decisions_path = run_dir / "decisions.json"
-    decisions: list[dict[str, object]] = []
-    all_facts = []
+    decisions: list[Mapping[str, object]] = []
+    all_facts: list[Fact] = []
     permission_counts = {"allow": 0, "ask": 0, "deny": 0}
     tool_result_count = 0
     coverage_status: str | None = None
@@ -304,12 +306,14 @@ def run_fixture(
         recorder.append("memory_written", run_id=run_id, scope="decision", path=str(path), text=text)
     if fixture.memory_project or fixture.memory_decisions or fixture.context_skill:
         memory = list_memory(project_root)
+        memory_decisions = memory.get("decisions")
+        memory_summaries = memory.get("run_summaries")
         recorder.append(
             "memory_loaded",
             run_id=run_id,
             project_memory_present=bool(memory.get("project")),
-            decision_count=len(memory.get("decisions", [])),
-            run_summary_count=len(memory.get("run_summaries", [])),
+            decision_count=len(memory_decisions) if isinstance(memory_decisions, list) else 0,
+            run_summary_count=len(memory_summaries) if isinstance(memory_summaries, list) else 0,
         )
     if fixture.context_skill:
         pack_path, manifest_path = build_context_pack(
@@ -398,7 +402,7 @@ def run_fixture(
             decisions.append(outcome.sandbox_decision.to_dict())
         if outcome.result is not None:
             tool_result_count += 1
-        all_facts.extend(outcome.facts)
+        all_facts.extend(cast(tuple[Fact, ...], outcome.facts))
 
     if fixture.final_answer is not None:
         (run_dir / "final-answer.md").write_text(fixture.final_answer, encoding="utf-8")

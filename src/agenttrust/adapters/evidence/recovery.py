@@ -115,6 +115,7 @@ def restore_run(run_dir: Path, only_file: str | None = None, dry_run: bool = Fal
             recorder.append("restore_preview", run_id=record.run_id, tool_call_id=record.tool_call_id, **action)
             continue
         if record.existed and record.backup_path:
+            assert backup_path is not None
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(backup_path.read_bytes())
         elif target.exists():

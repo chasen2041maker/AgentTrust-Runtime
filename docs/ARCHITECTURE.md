@@ -119,7 +119,7 @@ Each run writes artifacts under `.agenttrust/runs/{run_id}/`:
 - `context-pack.md`
 - `context-manifest.json`
 
-Trace is append-only. This implementation does not provide a tamper-evident hash chain.
+Trace is append-only and hash-linked. Each event carries `previous_hash` and `event_hash`; `agenttrust evidence verify <run_id>` independently verifies the chain.
 
 ## Design Principles
 

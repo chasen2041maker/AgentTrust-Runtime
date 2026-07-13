@@ -23,4 +23,4 @@ The repository now includes:
 
 ## Deliberate Boundary
 
-AgentTrust Runtime still does not attempt to be a full production platform. It does not implement a remote MCP proxy, skill marketplace, cloud policy service, full observability backend, TUI coding assistant, automatic long-term persona memory, or tamper-evident audit hash chain.
+AgentTrust Runtime still does not attempt to be a full production platform. It does not implement a remote MCP proxy, skill marketplace, cloud policy service, full observability backend, TUI coding assistant, or automatic long-term persona memory. Local audit evidence is hash-linked and independently verifiable, but it is not a remotely witnessed ledger.

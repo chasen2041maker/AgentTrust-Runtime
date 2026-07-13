@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Sequence
 
+from agenttrust.application.ports import EvidenceRecord
 from agenttrust.domain.models import ToolResult
 
 
@@ -84,7 +86,7 @@ def map_tool_result(result: ToolResult) -> list[Fact]:
     return facts
 
 
-def write_facts(path: Path, facts: list[Fact]) -> None:
+def write_facts(path: Path, facts: Sequence[EvidenceRecord]) -> None:
     with path.open("a", encoding="utf-8", newline="\n") as fact_file:
         for fact in facts:
             fact_file.write(json.dumps(fact.to_dict(), ensure_ascii=False, sort_keys=True))
