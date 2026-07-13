@@ -45,3 +45,4 @@ All notable changes to AgentTrust Runtime are documented here.
 
 - Fixture and live tool execution now run through the application-layer `RunToolUseCase` while preserving existing CLI behavior and evidence event ordering.
 - Legacy schema and permission import paths now re-export the domain objects for migration compatibility.
+- YAML policy loading, filesystem sandboxing, JSONL trace storage, and the local tool gateway now have explicit adapter-layer homes with compatibility facades.

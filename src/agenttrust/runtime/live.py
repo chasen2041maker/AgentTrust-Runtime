@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
+from agenttrust.adapters.sandbox.filesystem import PathSandbox
+from agenttrust.adapters.tools.gateway import ToolGateway
 from agenttrust.application.run_tool import RunToolUseCase
 from agenttrust.runtime.fixtures import RunResult, create_run_id
-from agenttrust.runtime.gateway import ToolGateway
-from agenttrust.runtime.trace import TraceRecorder
-from agenttrust.permissions import PathSandbox, PermissionEngine, evaluate_pre_tool_hooks, finalize_permission, load_policy
+from agenttrust.permissions import PermissionEngine, evaluate_pre_tool_hooks, finalize_permission, load_policy
 from agenttrust.schemas import ToolIntent
 from agenttrust.groundguard_adapter import map_tool_result, write_facts
 

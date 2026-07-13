@@ -1,4 +1,4 @@
-"""Compatibility exports for the JSONL evidence adapter."""
+"""Evidence persistence adapters."""
 
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace
 

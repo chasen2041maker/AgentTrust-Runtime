@@ -1,0 +1,58 @@
+"""YAML-backed policy loading adapter."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from agenttrust.domain.policy import Policy
+
+
+DEFAULT_POLICY_TEXT = """project_root: .
+mode: default
+
+rules:
+  - id: block-secret-files
+    tool: read_file
+    paths:
+      - "**/.env"
+      - ".env"
+      - "**/*.pem"
+      - "~/.ssh/**"
+    effect: deny
+    reason: "secret files are blocked"
+
+  - id: deny-dangerous-shell
+    tool: shell
+    command_patterns:
+      - "rm -rf /"
+      - "mkfs"
+      - "curl * | sh"
+      - "wget * | sh"
+    effect: deny
+    reason: "dangerous shell command"
+
+  - id: ask-before-write-code
+    tool: write_file
+    paths:
+      - "src/**"
+      - "tests/**"
+    effect: ask
+    reason: "code changes require approval"
+
+  - id: ask-before-mcp-tool
+    tool: mcp_tool
+    effect: ask
+    reason: "MCP tool calls require approval"
+"""
+
+
+def load_policy(path: Path) -> Policy:
+    """Load a YAML policy, using the local-first default when absent."""
+    if not path.exists():
+        return Policy.from_dict(yaml.safe_load(DEFAULT_POLICY_TEXT))
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("policy file must contain a mapping")
+    return Policy.from_dict(raw)

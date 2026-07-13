@@ -10,7 +10,7 @@ from pathlib import Path
 from agenttrust.context_lite import build_context_pack, export_context_to_run
 from agenttrust.mcp_lite import inspect_mcp_config
 from agenttrust.memory_lite import add_memory, clear_memory, list_memory
-from agenttrust.permissions.policy import DEFAULT_POLICY_TEXT, load_policy
+from agenttrust.adapters.policy.yaml_policy import DEFAULT_POLICY_TEXT, load_policy
 from agenttrust.runtime.fixtures import list_fixtures, run_fixture
 from agenttrust.runtime.live import run_live
 from agenttrust.runtime.recovery import restore_run

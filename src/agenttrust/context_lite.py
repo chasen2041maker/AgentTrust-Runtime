@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 
 from agenttrust.memory_lite import list_memory
-from agenttrust.permissions.policy import load_policy
+from agenttrust.adapters.policy.yaml_policy import load_policy
 from agenttrust.skills_lite import load_skill
 from agenttrust.tools.registry import list_tool_specs
 

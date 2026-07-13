@@ -9,13 +9,21 @@ from agenttrust.domain import decisions, models, policy
 from agenttrust.domain.decisions import FinalPermission, HookDecision, PermissionDecision, SandboxDecision
 from agenttrust.domain.models import ToolIntent, ToolResult, utc_now_iso
 from agenttrust.domain.policy import HookRule, Policy, PolicyRule
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder as AdapterTraceRecorder
+from agenttrust.adapters.policy.yaml_policy import load_policy as adapter_load_policy
+from agenttrust.adapters.sandbox.filesystem import PathSandbox as AdapterPathSandbox
+from agenttrust.adapters.tools.gateway import ToolGateway as AdapterToolGateway
 from agenttrust.permissions.approvals import FinalPermission as LegacyFinalPermission
 from agenttrust.permissions.engine import PermissionDecision as LegacyPermissionDecision
 from agenttrust.permissions.hooks import HookDecision as LegacyHookDecision
 from agenttrust.permissions.hooks import HookRule as LegacyHookRule
+from agenttrust.permissions.policy import load_policy as legacy_load_policy
 from agenttrust.permissions.policy import Policy as LegacyPolicy
 from agenttrust.permissions.policy import PolicyRule as LegacyPolicyRule
+from agenttrust.permissions.sandbox import PathSandbox as LegacyPathSandbox
 from agenttrust.permissions.sandbox import SandboxDecision as LegacySandboxDecision
+from agenttrust.runtime.gateway import ToolGateway as LegacyToolGateway
+from agenttrust.runtime.trace import TraceRecorder as LegacyTraceRecorder
 from agenttrust.schemas import ToolIntent as LegacyToolIntent
 from agenttrust.schemas import ToolResult as LegacyToolResult
 from agenttrust.schemas import utc_now_iso as legacy_utc_now_iso
@@ -104,3 +112,10 @@ def test_legacy_decision_and_policy_imports_reexport_domain_objects() -> None:
     assert LegacyPolicyRule is PolicyRule
     assert decisions.PermissionDecision is PermissionDecision
     assert policy.PolicyRule is PolicyRule
+
+
+def test_legacy_infrastructure_imports_reexport_adapter_implementations() -> None:
+    assert legacy_load_policy is adapter_load_policy
+    assert LegacyPathSandbox is AdapterPathSandbox
+    assert LegacyTraceRecorder is AdapterTraceRecorder
+    assert LegacyToolGateway is AdapterToolGateway

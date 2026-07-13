@@ -1,4 +1,4 @@
-"""Compatibility export for the local tool-executor adapter."""
+"""Local tool-execution adapters."""
 
 from agenttrust.adapters.tools.gateway import ToolGateway
 
