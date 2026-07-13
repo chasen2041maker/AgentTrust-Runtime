@@ -7,7 +7,8 @@ from pathlib import Path
 
 from agenttrust.domain.models import ToolIntent, ToolResult
 from agenttrust.adapters.tools.file import read_file, write_file
-from agenttrust.tools import git_diff, mcp_tool, shell, skill_context
+from agenttrust.adapters.tools.shell import shell
+from agenttrust.tools import git_diff, mcp_tool, skill_context
 
 
 ToolHandler = Callable[[ToolIntent, Path], ToolResult]
