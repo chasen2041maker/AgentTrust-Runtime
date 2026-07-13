@@ -128,7 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     tool_inspect = tools_subparsers.add_parser("inspect", help="Inspect one tool.")
     tool_inspect.add_argument("name")
 
-    mcp_parser = subparsers.add_parser("mcp", help="MCP Lite helpers.")
+    mcp_parser = subparsers.add_parser("mcp", help="MCP gateway helpers.")
     mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command", required=True)
     mcp_subparsers.add_parser("discover", help="Statically discover local MCP configs without starting servers.")
     mcp_inspect = mcp_subparsers.add_parser("inspect", help="Inspect an MCP config.")
@@ -434,7 +434,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "benchmark" and args.benchmark_command == "security":
-        report = run_security_benchmark()
+        report = run_security_benchmark(project_root / ".agenttrust" / "benchmarks" / "security-v1")
         if args.output:
             output_path = report.write_json((project_root / args.output).resolve())
             print(output_path)

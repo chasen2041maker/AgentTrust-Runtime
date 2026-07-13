@@ -1,104 +1,41 @@
-# Core Concepts
+# 核心概念
 
-AgentTrust Runtime is built around a small set of auditable objects. Keeping these objects explicit is what makes the runtime deterministic and testable.
+## AgentSession
 
-## ToolIntent
+`AgentSession` 是一个完整 Agent 任务的边界。它包含 `run_id`、`actor_id`、可选 `agent_id`、`session_id`、`policy_version` 与生命周期状态。一个 session 内可连续调用多个工具，共享 evidence chain、fact ledger 和 policy snapshot。
 
-`ToolIntent` is the normalized request to execute a tool.
+## ToolIntent 与 SessionToolCall
 
-It includes:
+`ToolIntent` 是进入治理路径的标准化请求：工具名、参数、来源、运行模式、run 与 tool call ID。`SessionToolCall` 额外保留递增 sequence、参数摘要和生命周期状态。参数摘要是审批恢复的防替换绑定。
 
-- `run_id`
-- `tool_call_id`
-- `tool_name`
-- `arguments`
-- `source`
-- `runtime_mode`
+## Policy、PermissionDecision 与 FinalPermission
 
-Fixtures, live adapters, MCP wrapper calls, and Skill Lite runs all enter the runtime as `ToolIntent`.
+策略规则首先给出 `allow`、`ask`、`deny` 的 `PermissionDecision`。运行模式再把它变为可执行 `FinalPermission`：
 
-## PermissionDecision
-
-`PermissionDecision` records the policy result before execution:
-
-- `allow`: continue to sandbox/execution.
-- `ask`: require approval.
-- `deny`: stop before sandbox/execution.
-
-Runtime modes finalize `ask` differently:
-
-| Mode | `ask` Behavior |
+| 模式 | `ask` 的最终结果 |
 | --- | --- |
-| `interactive` | Prompt for approve/deny. |
-| `noninteractive` | Convert to `deny`, reason `approval_required`. |
-| `test` | Convert to `allow`, reason `mock_approver_approved`. |
+| `interactive` | 暂停为 `waiting_approval`，等待批准或拒绝。 |
+| `noninteractive` | `deny`，reason 为 `approval_required`。 |
+| `test` | 确定性 mock approver 放行，便于测试。 |
 
-Tool Registry default effects act as a safety fallback when no policy rule matches.
+没有匹配规则时，Tool Registry 的默认 effect 作为安全回退；没有注册的工具直接拒绝。
 
-## SkillDecision
+## ApprovalRequest
 
-Skill Lite loads local `SKILL.md` and `policy.yaml`.
+审批请求记录 `approval_id`、run/tool call、工具、`arguments_digest`、命中规则、原因、时间、决定与 approver。它可以在进程重启后由 `agenttrust approvals` 决定，随后使用 `agenttrust run resume` 恢复同一调用。
 
-The policy can define:
+## Evidence 与 SQLite 投影
 
-- `allowed_tools`
-- `blocked_tools`
-- `required_fact_keys`
-- `output_contract`
+`trace.jsonl` 是 append-only、hash-linked evidence。`state.db` 仅提供可查询的 session、tool call 和 approval 投影。`agenttrust evidence verify` 验证链，`agenttrust state rebuild` 从有效 evidence 重新生成投影。
 
-If a selected skill blocks a tool, the runtime stops before permission and execution.
+## Facts 与 FinalAnswerResult
 
-## HookDecision
+工具成功后，显式 `AGENTTRUST_FACTS` block 与可靠 metadata 可映射为 `Fact`。`session.finalize_answer()` 只使用当前 session 的 facts 调用 GroundGuard，产生 `FinalAnswerResult` 和 `groundguard-report.json`。策略可在事实不完整时警告、拒绝完成或要求修订。
 
-Hook Lite provides a minimal `pre_tool` extension point. Hooks can deny a tool call, but they cannot execute shell commands, call the network, or loosen policy.
+## MCP 信任面
 
-## PathSandbox
+MCP server 的 consent 与 tool trust 分开保存。真实 trust 保存 command hash、工具描述 hash 与输入 schema hash；后续发现任何漂移，状态变为 `trust_stale`。静态 `discover`/`inspect` 不启动 server。
 
-The sandbox constrains local file operations:
+## OTel 与安全基准
 
-- file reads/writes must stay inside `project_root`;
-- secret paths such as `.env`, `*.pem`, and `.ssh/**` are blocked;
-- common system directories are blocked;
-- write operations resolve the parent directory before mutation.
-
-## ToolResult
-
-`ToolResult` is the normalized result of a tool execution. It can include:
-
-- `status`
-- `output_preview`
-- `output_digest`
-- `metadata`
-- `error`
-
-Fact mapping and reporting use `ToolResult`, not raw arbitrary model text.
-
-## Fact
-
-Facts are explicit evidence extracted from tool results. AgentTrust maps:
-
-- `AGENTTRUST_FACTS` blocks in tool output;
-- selected metadata from `read_file`, `git_diff`, and `shell`;
-- wrapper facts from MCP and Skill Lite fixtures.
-
-GroundGuard receives these facts and checks whether the final answer cites them.
-
-## Run Artifact
-
-Run artifacts are the audit surface:
-
-```text
-.agenttrust/runs/{run_id}/
-  trace.jsonl
-  decisions.json
-  facts.jsonl
-  final-answer.md
-  groundguard-report.json
-  report.md
-  report.html
-  backups/
-  context-pack.md
-  context-manifest.json
-```
-
-The run directory is the unit of replay, reporting, and restore.
+OpenTelemetry exporter 只从 evidence 重建 span，不引入第二套运行事实。`security-v1` 将路径、秘密、shell、审批、MCP、篡改与事实控制编为 100 条确定性基准，报告列出每例结果与误报/漏报指标。

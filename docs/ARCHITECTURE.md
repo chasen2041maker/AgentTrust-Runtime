@@ -1,131 +1,82 @@
-# AgentTrust Runtime Architecture
+# 运行时架构
 
-AgentTrust Runtime implements a narrow, local-first control path for governed agent tool execution.
+AgentTrust Runtime 是一个 ports-and-adapters 风格的本地执行控制层。它不编排 Agent；外部框架、CLI 或自定义循环把工具请求交给它后，运行时负责策略、审批、沙箱、证据、恢复与最终答案核验。
 
-It is deliberately not a full agent framework. The runtime focuses on one question:
-
-> Before an agent tool call mutates or reads local state, can we decide, record, and later replay why it was allowed or denied?
-
-GroundGuard answers the later question:
-
-> Once the agent writes a final answer, is that answer supported by facts recorded from this run?
-
-AgentTrust connects those two questions into one run artifact.
-
-## Control Path
+## 控制路径
 
 ```mermaid
 flowchart LR
-    A["Input Source"] --> B["ToolIntent"]
-    B --> C["Skill Scope"]
-    C --> D["Permission Engine"]
-    D --> E["Pre-tool Hook"]
-    E --> F["Path Sandbox"]
-    F --> G["Recovery Backup"]
-    G --> H["Tool Gateway"]
-    H --> I["ToolResult"]
-    I --> J["Fact Mapper"]
-    J --> K["GroundGuard Check"]
-    I --> L["Trace / Decisions / Report"]
-    K --> L
+    A["Framework / CLI / Python API"] --> B["AgentTrustSession"]
+    B --> C["ToolIntent"]
+    C --> D["Policy + Tool Registry"]
+    D --> E["Approval State"]
+    E --> F["Hook + Path Sandbox"]
+    F --> G["Tool Gateway"]
+    G --> H["ToolResult + Facts"]
+    H --> I["JSONL Evidence"]
+    I --> J["SQLite Projection"]
+    H --> K["GroundGuard Final Answer"]
+    I --> L["OTel Export"]
 ```
 
-## Input Sources
+一个 session 的每次工具调用都带相同的 `run_id`、`actor_id`、`agent_id`、`session_id` 和 `policy_version`。`tool_call_id` 单调递增，避免把多个 Agent 任务混入同一审计单元。
 
-Supported sources:
-
-- `fixture`: deterministic demos and tests.
-- `live_adapter`: minimal `run-live fake_tool_request` adapter.
-- `mcp_lite`: MCP wrapper fixture normalized as `ToolIntent(tool_name="mcp_tool")`.
-- `skill_lite`: local `SKILL.md` plus `policy.yaml` bound to a run.
-
-All sources share the same permission, sandbox, gateway, trace, fact mapping, and report path.
-
-## Module Boundaries
+## 生命周期
 
 ```text
-agenttrust/
-  schemas.py                  # ToolIntent / ToolResult
-  cli.py                      # command-line interface
-  permissions/
-    policy.py                 # YAML policy loading and rule matching
-    engine.py                 # allow / ask / deny evaluation
-    approvals.py              # runtime-mode finalization
-    sandbox.py                # project-root and secret path checks
-    hooks.py                  # pre_tool hook decisions
-  runtime/
-    fixtures.py               # deterministic run source
-    live.py                   # minimal live adapter
-    gateway.py                # tool dispatch
-    trace.py                  # append-only trace writer
-    report.py                 # replay / markdown / html reports
-    recovery.py               # write_file backup and restore
-  tools/
-    file.py                   # read_file / write_file
-    shell.py                  # shell execution and simulated output
-    git.py                    # git_diff
-    mcp.py                    # MCP Lite wrapper
-    skill.py                  # skill_context pseudo-tool
-    registry.py               # tool surface metadata
-  groundguard_adapter/
-    mapper.py                 # ToolResult -> Fact
-    verifier.py               # FactGate adapter with deterministic fallback
-  mcp_lite.py                 # MCP config inspection
-  skills_lite.py              # local SKILL.md loader
-  memory_lite.py              # explicit memory store
-  context_lite.py             # deterministic context pack builder
+created -> running -> completed
+                  -> failed
+                  -> cancelled
+                  -> waiting_approval -> running
 ```
 
-## Runtime Controls
+工具调用状态是 `requested`、`policy_denied`、`waiting_approval`、`approved`、`sandbox_denied`、`executing`、`succeeded` 或 `failed`。领域状态转换在 `domain/lifecycle.py` 内校验，不允许接口层任意改写。
 
-- Permission Engine evaluates YAML policy rules with `allow`, `ask`, and `deny`.
-- Tool Registry default effects provide a safety fallback when no policy rule matches.
-- Noninteractive `ask` becomes `deny` with `reason=approval_required`.
-- Interactive `ask` records an approval request and waits for approve/deny.
-- Test mode uses a mock approver and turns `ask` into `allow`.
-- Skill Lite denies tools outside the selected skill policy before permission.
-- Hook Lite runs after the tentative permission decision and before sandboxing.
-- Path Sandbox resolves paths, keeps file operations inside `project_root`, blocks secret files, and records sandbox decisions.
-- Recovery Lite creates backups before `write_file` mutation and constrains restore to project/run directories.
+## 分层与依赖规则
 
-## Tool Surface
+```text
+domain/        纯模型、策略、状态机、审批摘要；只依赖标准库和 domain
+application/   use case 与 port；依赖 domain，不导入具体 adapter
+adapters/      YAML、JSONL、SQLite、文件、shell、MCP、GroundGuard、OTel
+interfaces/    CLI 与 Python SDK，负责组合并调用 application
+integrations/  OpenAI Agents、LangGraph、Pydantic AI 的 session 复用包装
+benchmark/     公开的确定性安全控制回归数据集
+```
 
-Built-in tools:
+兼容模块保留旧 import 路径，但真正的实现位于边缘 adapter。架构边界测试确保 domain 不依赖 CLI、YAML、文件系统或 subprocess，application 不直接导入具体 adapter。
 
-- `read_file`
-- `write_file`
-- `shell`
-- `git_diff`
+## 存储模型
 
-Lite wrapper tools:
+```text
+.agenttrust/
+  policy.yaml
+  state.db
+  mcp-consent.json
+  mcp-trust.json
+  runs/{run_id}/
+    trace.jsonl
+    facts.jsonl
+    approvals.jsonl
+    policy-snapshot.yaml
+    groundguard-report.json
+    backups/
+```
 
-- `mcp_tool`
-- `skill_context`
+- `trace.jsonl` 是 append-only evidence 源。每个事件包含上一事件 hash 与自身 hash。
+- `state.db` 是 session、tool call 和 approval 的查询投影，不是信任根。
+- `agenttrust state rebuild` 会先验证 trace，再从 JSONL 重建 SQLite。
+- policy snapshot 与 identity 被绑定到每个 evidence event；恢复不使用后来修改过的项目 policy。
 
-The Tool Registry exposes name, category, input schema, default permission effect, enabled state, and source.
+## 策略、审批和沙箱
 
-## Run Artifacts
+策略返回 `allow`、`ask` 或 `deny`。未匹配规则时静态 Tool Registry 提供默认效果；没有注册的工具直接返回 `unregistered_tool`。`ask` 的最终效果取决于运行模式：interactive 等待决定、noninteractive 拒绝、test 由确定性 mock approver 放行。
 
-Each run writes artifacts under `.agenttrust/runs/{run_id}/`:
+`PathSandbox` 将文件工具限制在 project root 内，拒绝系统路径、`.env`、PEM 与 SSH 路径。对写入，它先解析父目录再计算目标，降低新路径和符号链接逃逸的风险。恢复同时约束目标路径与 backup 路径。
 
-- `trace.jsonl`
-- `decisions.json`
-- `facts.jsonl`
-- `final-answer.md`
-- `groundguard-report.json`
-- `report.md`
-- `report.html`
-- `backups/`
-- `context-pack.md`
-- `context-manifest.json`
+## MCP 边界
 
-Trace is append-only and hash-linked. Each event carries `previous_hash` and `event_hash`; `agenttrust evidence verify <run_id>` independently verifies the chain.
+真实 stdio MCP 的执行顺序是：静态发现、inspect、consent、`tools/list`、tool trust、fingerprint 校验、`tools/call`。command hash、工具 description hash 和 input schema hash 都进入信任记录；漂移使记录失效，调用被拒绝并写入 evidence。
 
-## Design Principles
+## 最终答案与可观测性
 
-1. **Local-first:** no hosted service is required.
-2. **Deterministic:** fixtures and tests do not require an LLM.
-3. **Narrow waist:** all sources become `ToolIntent`, and all tool outputs become `ToolResult`.
-4. **Explicit evidence:** facts must be explicitly mapped; the runtime does not infer arbitrary truth.
-5. **Replayable:** every important decision is written as an artifact.
-6. **GroundGuard-compatible:** final-answer verification reuses GroundGuard's FactGate when available.
+工具结果经 mapper 形成显式 facts；`finalize_answer()` 将答案与同一 session 的 facts 交给 GroundGuard。证据 export 不创建第二个事实源：OTel adapter 从 JSONL 重建 `agenttrust.session`、工具阶段和最终答案 span，供 OTLP 后端消费。

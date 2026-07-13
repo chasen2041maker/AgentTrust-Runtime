@@ -1,83 +1,43 @@
-# Threat Model
+# 威胁模型
 
-## Scope
+## 范围
 
-AgentTrust Runtime protects local developer workflows where an agent can request file, shell, git, MCP wrapper, skill-context, and write operations through Tool Gateway.
+AgentTrust 保护本地开发工作流中的受治理工具调用：文件、shell、git、MCP、动态 Python tool、skill/context 与 `write_file` 恢复。它假设模型输出、工具参数、MCP 描述和最终自然语言答案都是不可信输入。
 
-## Assets
+## 资产与信任边界
 
-- Project source code
-- Secret files such as `.env`, PEM files, and SSH keys
-- Run trace and fact ledger
-- Permission and hook decisions
-- Recovery backups
-- Memory and context artifacts
-- Final answer report
+- 项目源码、秘密文件与系统路径。
+- 策略快照、审批决定、run evidence、facts、恢复备份。
+- MCP server command、环境变量 key、工具描述与输入 schema。
+- 最终答案中的事实断言。
 
-## Trust Boundaries
+JSONL 是运行期 append-only、可独立验证的 evidence 源；SQLite 只是可重建投影。hash chain 能发现普通篡改，但没有签名或外部锚定，拥有本地写权限的攻击者仍可重写全链。AgentTrust 不输出 MCP 环境变量值，也不自动上传本地 artifact。
 
-- Agent output is untrusted
-- Tool arguments are untrusted until checked
-- MCP configs are inspected locally and env values are not exposed in CLI output
-- Skill instructions are local project files, not trusted remote marketplace packages
-- File system outside `project_root` is untrusted and out of scope
-- Tool output is evidence only after mapper records structured facts
-- GroundGuard verification checks recorded facts, not arbitrary truth
+## 覆盖攻击与控制
 
-## Attacker Capabilities
+| 攻击 | 主控制 | 可验证证据 |
+| --- | --- | --- |
+| 路径遍历、系统路径或符号链接逃逸 | `PathSandbox` | `sandbox_decision` |
+| `.env`、PEM、SSH 秘密读取 | sandbox + secret policy | 拒绝 reason |
+| 危险 shell | 默认 `ask` + 危险模式 `deny` | `permission_decision` |
+| 非交互模式绕过人工批准 | `ask -> deny` | `approval_required` |
+| 批准后替换参数 | approval-bound `arguments_digest` | resume 拒绝 |
+| 未注册工具 | registry fail-closed | `unregistered_tool` |
+| MCP 未授权、未信任或 schema 漂移 | consent + trust + fingerprints | `trust_stale` / MCP evidence |
+| 篡改 run history | hash-linked JSONL verification | `event_hash_mismatch` |
+| 事实矛盾或缺失 | GroundGuard fact check | `groundguard-report.json` |
+| 越界恢复 | target/backup path constraints | restore trace |
 
-- Prompt injection causes agent to request dangerous tools
-- Agent attempts to read secret files
-- Agent attempts to write project files without approval
-- Agent attempts dangerous shell commands
-- Agent attempts to invoke MCP wrapper tools without approval
-- Agent attempts to use a tool blocked by a selected skill
-- Agent outputs unsupported or contradicted final claims
+`security-v1` 把其中七类控制编成 100 个公开确定性测试样例，详见 [安全基准](../benchmarks/README.md)。
 
-## Covered Controls
+## 关键安全不变量
 
-- Permission Engine `allow` / `ask` / `deny`
-- Interactive approve/deny handling
-- Noninteractive `ask -> deny`
-- Test-mode mock approval
-- Path Sandbox
-- Dangerous shell deny rules
-- MCP wrapper default `ask`
-- Skill tool-scope enforcement
-- `pre_tool` hooks that can deny before sandbox/execution
-- `write_file` backups and restore trace events
-- Hash-linked evidence trace with independent verification
-- Structured fact verification
-- Deterministic context pack manifests
+1. 未知工具和 noninteractive `ask` 不能到达工具网关。
+2. 审批只能恢复原始的 tool call、原始 policy snapshot 和原始参数摘要。
+3. 未获 consent 的 MCP server 不启动；未信任或已漂移工具不调用。
+4. 无效 trace 不能用于恢复或状态重建。
+5. 不同 session 的 facts 不可混用以核验最终答案。
 
-## Explicit Non-Goals
+## 残余风险与非目标
 
-- No remote MCP proxy
-- No remote skill marketplace or dynamic skill installation
-- No network egress control
-- No multi-agent coordination controls
-- No automatic long-term persona memory
-- No LLM-based context compaction
-- No TUI
-- No full git worktree manager
-- No subagent/team orchestration
-- No remote or externally witnessed evidence ledger
-- No complete OWASP Agentic Top 10 coverage
-- No universal natural language fact checking
-
-## Abuse Cases
-
-1. Read `.env`
-2. Read `~/.ssh/id_rsa`
-3. Symlink escape outside `project_root`
-4. Execute `rm -rf /`
-5. Write source file in noninteractive mode
-6. Invoke `mcp_tool` in noninteractive mode
-7. Use a tool blocked by `code-review` skill policy
-8. Produce final answer with contradicted revenue number
-9. Produce final answer with unverified revenue number
-10. Restore a file modified by `write_file`
-
-## Residual Risk
-
-The runtime can block configured local actions, restore local writes that went through `write_file`, and verify structured facts, but it cannot prove model intent, cannot detect every malicious output, and cannot secure tools that bypass Tool Gateway.
+AgentTrust 不能证明模型意图，也不能保护绕过 Tool Gateway 的外部工具。它没有网络 egress sandbox、远程见证日志、云 policy server、账户/组织权限模型、通用自然语言真伪裁判或完整 OWASP Agentic Top 10 覆盖。local artifact 仍可能包含敏感输出，用户在共享前必须检查和脱敏。

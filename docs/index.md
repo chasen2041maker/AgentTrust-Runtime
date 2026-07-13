@@ -1,45 +1,26 @@
-# AgentTrust Runtime Docs
+# AgentTrust Runtime 文档
 
-AgentTrust Runtime is a local-first governance layer for AI agent tool execution. It turns tool requests into auditable `ToolIntent` objects, applies permission and sandbox controls, records run artifacts, and routes final-answer facts into GroundGuard.
+AgentTrust Runtime 是本地优先的 Agent 工具执行控制层：它为现有 Agent 框架补上会话状态、策略、审批、沙箱、真实 MCP 信任、可验证 evidence 与最终答案事实核验。
 
-## Start Here
+## 从这里开始
 
-- [Getting started](getting-started.md): install, initialize, and run the first fixtures.
-- [CLI reference](cli.md): commands grouped by workflow.
-- [Core concepts](concepts.md): the objects and decisions that make up the runtime.
-- [Architecture](ARCHITECTURE.md): module boundaries and control flow.
-- [Enterprise architecture upgrade](enterprise-architecture.md): target layered architecture and control matrix.
-- [Refactor roadmap](refactor-roadmap.md): phased code-architecture migration plan.
-- [Threat model](THREAT_MODEL.md): covered controls, non-goals, and residual risk.
-- [Related work and scope](RELATED_WORK.md): where AgentTrust fits next to governance, tracing, and fact-gate tools.
-- [Changelog](../CHANGELOG.md): notable changes.
-- [Contributing](../CONTRIBUTING.md): development setup and contribution rules.
-- [Security](../SECURITY.md): security scope and artifact hygiene.
+- [快速入门](getting-started.md)：安装、首个可验证 run 与 Session API。
+- [CLI 参考](cli.md)：命令、审批恢复、MCP 和 OTel 导出。
+- [核心概念](concepts.md)：领域对象和状态机。
+- [运行时架构](ARCHITECTURE.md)：控制路径、存储职责和包边界。
+- [威胁模型](THREAT_MODEL.md)：攻击者模型、覆盖控制与残余风险。
+- [相关工作与边界](RELATED_WORK.md)：项目定位与刻意不做的内容。
+- [架构演进方案](enterprise-architecture.md)：已落地能力与下一阶段边界。
+- [重构路线图](refactor-roadmap.md)：架构迁移的完成状态。
+- [安全基准](../benchmarks/README.md)：公开的 100 例确定性攻击数据集。
+- [变更记录](../CHANGELOG.md)：版本演进。
+- [贡献指南](../CONTRIBUTING.md) 与 [安全策略](../SECURITY.md)。
 
-## What The Runtime Proves
+## 当前保证
 
-AgentTrust is intentionally small. It proves that a local runtime can:
-
-1. Normalize agent tool requests before execution.
-2. Gate risky actions with policy, hooks, skills, and sandbox checks.
-3. Keep replayable trace and decision artifacts.
-4. Backup local writes and restore them by run id.
-5. Map tool results into structured facts.
-6. Ask GroundGuard whether the final answer is supported by those facts.
-
-## Main Demo Paths
-
-```bash
-agenttrust run-fixture blocked_secret
-agenttrust run-fixture mcp_tool_approved --mode test
-agenttrust run-fixture skill_code_review
-agenttrust run-fixture write_and_restore --mode test
-agenttrust run-fixture memory_context_pack
-```
-
-After any run:
-
-```bash
-agenttrust replay <run_id>
-agenttrust report <run_id> --format html
-```
+1. 同一 session 的多次工具调用共享身份、策略快照、facts 与 hash-linked evidence。
+2. `ask` 在 noninteractive 运行中 fail closed；审批恢复绑定原始参数摘要。
+3. JSONL 是证据源，SQLite 可从已验证 trace 重建。
+4. MCP config 的 inspect 不启动 server；真实调用需要 consent、tool trust 和未漂移的 fingerprint。
+5. OpenTelemetry 从 evidence 重建 span；项目不托管 Dashboard。
+6. `security-v1` 用 100 个确定性攻击用例回归上述控制。

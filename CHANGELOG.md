@@ -2,6 +2,30 @@
 
 All notable changes to AgentTrust Runtime are documented here.
 
+## 0.5.0 - 2026-07-13
+
+### Added
+
+- Session-scoped runtime with durable lifecycle state, shared identity and policy snapshots, sequential tool calls, timeout handling, cancellation, and persisted approvals that bind the approved argument digest.
+- `finalize_answer()` lifecycle with GroundGuard-backed fact checks and policy modes for warning, denial, or revision.
+- `govern()` and `@governed_tool` for ordinary synchronous Python functions, plus session-reusing integrations for OpenAI Agents SDK, LangGraph, and Pydantic AI.
+- Real local MCP stdio transport with static discovery, explicit consent, tool-level trust, command/schema fingerprints, drift invalidation, and structured transport evidence.
+- SQLite state projection and `agenttrust state rebuild` recovery from verified JSONL evidence.
+- OpenTelemetry evidence export through `agenttrust evidence export-otel <run_id> --endpoint <url>`.
+- Public deterministic `security-v1` benchmark with 100 adversarial cases and JSON metrics via `agenttrust benchmark security`.
+- Runnable, API-key-free examples for the three supported framework integrations.
+
+### Changed
+
+- `shell` now defaults to `ask` and safe shell execution accepts argv with `shell=False`; compatibility behavior is explicitly named `unsafe_shell_command`.
+- Unregistered tools now fail closed at permission evaluation.
+- Evidence is hash-linked JSONL backed by a queryable SQLite projection; run state can be reconstructed from verified source evidence.
+
+### Security
+
+- MCP servers require persisted consent before trust or real transport use, and trusted tools are denied after command or schema drift.
+- The security benchmark covers path escape, secret access, shell injection, approval bypass, MCP drift, evidence tampering, and fact contradiction controls.
+
 ## 0.1.0 - 2026-07-09
 
 ### Added

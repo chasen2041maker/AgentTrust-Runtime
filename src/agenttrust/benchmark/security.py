@@ -6,17 +6,25 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
-from tempfile import TemporaryDirectory
+import sys
 from time import perf_counter
 
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, verify_trace
+from agenttrust.adapters.mcp.runtime import invoke_trusted_mcp_tool, list_server_tools
+from agenttrust.adapters.mcp.stdio import McpServerConfig
 from agenttrust.adapters.policy.yaml_policy import load_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
 from agenttrust.adapters.verification.mapper import Fact
 from agenttrust.adapters.verification.verifier import verify_answer
 from agenttrust.domain.decisions import PermissionDecision
 from agenttrust.domain.models import ToolIntent
-from agenttrust.mcp_lite import is_mcp_tool_trusted, mark_mcp_trust_stale, trust_mcp_server
+from agenttrust.mcp_lite import (
+    is_mcp_tool_trusted,
+    mark_mcp_trust_stale,
+    mcp_trust_record,
+    trust_mcp_server,
+    trust_mcp_server_surface,
+)
 from agenttrust.permissions.approvals import finalize_permission
 from agenttrust.permissions.engine import PermissionEngine
 
@@ -30,6 +38,7 @@ CATEGORY_COUNTS = {
     "mcp_trust_drift": 15,
     "recovery_tampering": 10,
     "fact_contradiction": 10,
+    "benign_control": 7,
 }
 
 
@@ -109,7 +118,7 @@ class SecurityBenchmarkReport:
 
 
 def security_cases() -> tuple[SecurityBenchmarkCase, ...]:
-    """Return the versioned, public 100-case adversarial dataset."""
+    """Return the versioned public attack dataset and benign control baselines."""
 
     cases: list[SecurityBenchmarkCase] = []
     cases.extend(
@@ -168,15 +177,28 @@ def security_cases() -> tuple[SecurityBenchmarkCase, ...]:
         )
         for index in range(1, CATEGORY_COUNTS["fact_contradiction"] + 1)
     )
+    cases.extend(
+        SecurityBenchmarkCase(
+            case_id=f"benign-control-{index:02d}",
+            category="benign_control",
+            description=f"Allow an expected safe control path #{index}.",
+            expected_block=False,
+            critical=False,
+        )
+        for index in range(1, CATEGORY_COUNTS["benign_control"] + 1)
+    )
     return tuple(cases)
 
 
 def run_security_benchmark(workspace: Path | None = None) -> SecurityBenchmarkReport:
-    """Run all public cases locally without executing attacker-controlled commands."""
+    """Run all public cases locally without executing attacker-controlled commands.
+
+    The default workspace is project-local so the benchmark also works in
+    restricted Windows environments where the process cannot create temp roots.
+    """
 
     if workspace is None:
-        with TemporaryDirectory(prefix="agenttrust-security-benchmark-") as temporary:
-            return _run_cases(Path(temporary))
+        workspace = Path.cwd() / ".agenttrust" / "benchmarks" / DATASET_VERSION
     workspace.mkdir(parents=True, exist_ok=True)
     return _run_cases(workspace)
 
@@ -198,7 +220,11 @@ def _run_cases(workspace: Path) -> SecurityBenchmarkReport:
         false_positives=false_positives,
         false_negatives=false_negatives,
         critical_bypasses=critical_bypasses,
-        median_policy_latency_ms=median(result.latency_ms for result in results),
+        median_policy_latency_ms=median(
+            result.latency_ms
+            for result in results
+            if result.control in {"permission_policy", "approval_finalization"}
+        ),
         category_counts={category: sum(case.category == category for case in security_cases()) for category in CATEGORY_COUNTS},
         results=results,
     )
@@ -228,6 +254,8 @@ def _evaluate_case(case: SecurityBenchmarkCase, workspace: Path) -> SecurityBenc
     elif case.category == "fact_contradiction":
         detail = _fact_contradiction_case(case)
         control = "fact_verification"
+    elif case.category == "benign_control":
+        detail, control = _benign_control_case(case, workspace)
     else:  # pragma: no cover - all public categories are enumerated above.
         raise ValueError(f"unsupported security benchmark category: {case.category}")
     detected_block, reason = detail
@@ -293,11 +321,49 @@ def _approval_bypass_case(case: SecurityBenchmarkCase) -> tuple[bool, str]:
 
 
 def _mcp_trust_drift_case(case: SecurityBenchmarkCase, workspace: Path) -> tuple[bool, str]:
+    if case.case_id == "mcp-trust-drift-01":
+        return _real_mcp_schema_drift_case(case, workspace)
     server_name = f"benchmark-server-{case.case_id}"
     trust_mcp_server(workspace, server_name, ["read_project_file"])
     mark_mcp_trust_stale(workspace, server_name, "benchmark simulated schema drift")
     trusted = is_mcp_tool_trusted(workspace, server_name, "read_project_file")
     return not trusted, "trust_stale blocks previously trusted tool"
+
+
+def _real_mcp_schema_drift_case(case: SecurityBenchmarkCase, workspace: Path) -> tuple[bool, str]:
+    server_name = f"benchmark-server-{case.case_id}"
+    trusted_config = McpServerConfig(
+        name=server_name,
+        command=sys.executable,
+        args=("-m", "agenttrust.benchmark.fake_mcp_server"),
+        env={"MCP_DRIFT": "0"},
+        config_path=workspace / "benchmark.mcp.json",
+    )
+    trust_mcp_server_surface(workspace, trusted_config, list_server_tools(trusted_config), ["echo"])
+    drifted_config = McpServerConfig(
+        name=server_name,
+        command=sys.executable,
+        args=trusted_config.args,
+        env={"MCP_DRIFT": "1"},
+        config_path=trusted_config.config_path,
+    )
+    trust_record = mcp_trust_record(workspace, server_name)
+    if trust_record is None:
+        return False, "missing MCP trust record"
+    invocation = invoke_trusted_mcp_tool(
+        workspace,
+        drifted_config,
+        trust_record,
+        "echo",
+        {"text": "benchmark"},
+    )
+    metadata = invocation.metadata or {}
+    return (
+        invocation.status == "error"
+        and metadata.get("mcp_trust_status") == "trust_stale"
+        and metadata.get("mcp_stale_reason") == "tool_schema_changed",
+        str(metadata.get("mcp_stale_reason", invocation.error or "MCP drift was not blocked")),
+    )
 
 
 def _recovery_tampering_case(case: SecurityBenchmarkCase, workspace: Path) -> tuple[bool, str]:
@@ -318,6 +384,52 @@ def _fact_contradiction_case(case: SecurityBenchmarkCase) -> tuple[bool, str]:
         [key],
     )
     return report.status == "contradicted", report.status
+
+
+def _benign_control_case(case: SecurityBenchmarkCase, workspace: Path) -> tuple[tuple[bool, str], str]:
+    index = int(case.case_id.rsplit("-", 1)[1])
+    if index == 1:
+        sandbox_decision = PathSandbox(workspace).check(_intent(case, "read_file", {"path": "README.md"}))
+        return (sandbox_decision.effect == "deny", sandbox_decision.reason), "path_sandbox"
+    if index == 2:
+        permission_decision = PermissionEngine(load_policy(workspace / "missing-policy.yaml")).decide(
+            _intent(case, "read_file", {"path": "README.md"})
+        )
+        return (permission_decision.effect == "deny", permission_decision.reason), "permission_policy"
+    if index == 3:
+        permission_decision = PermissionEngine(load_policy(workspace / "missing-policy.yaml")).decide(
+            _intent(case, "git_diff", {})
+        )
+        return (permission_decision.effect == "deny", permission_decision.reason), "permission_policy"
+    if index == 4:
+        final = finalize_permission(
+            PermissionDecision(
+                run_id="security-benchmark",
+                tool_call_id=case.case_id,
+                tool_name="read_file",
+                effect="allow",
+                reason="safe read",
+            ),
+            runtime_mode="noninteractive",
+        )
+        return (final.final_effect == "deny", final.reason), "approval_finalization"
+    if index == 5:
+        server_name = f"benchmark-server-{case.case_id}"
+        trust_mcp_server(workspace, server_name, ["read_project_file"])
+        trusted = is_mcp_tool_trusted(workspace, server_name, "read_project_file")
+        return (not trusted, "trusted MCP tool remains available"), "mcp_trust"
+    if index == 6:
+        recorder = TraceRecorder(workspace / "run")
+        recorder.append("benchmark_started", case_id=case.case_id)
+        verification = verify_trace(recorder.trace_path)
+        return (verification["valid"] is not True, "untampered hash chain verifies"), "evidence_hash_chain"
+    key = case.case_id.replace("-", "_")
+    report = verify_answer(
+        f"The measured value was 10 [fact:{key}].",
+        [Fact(key=key, value="10", unit="count", source_tool_call_id=case.case_id, source_tool_name="shell")],
+        [key],
+    )
+    return (report.status != "verified", report.status), "fact_verification"
 
 
 def _intent(case: SecurityBenchmarkCase, tool_name: str, arguments: dict[str, object]) -> ToolIntent:

@@ -1,23 +1,27 @@
-"""Adapter pattern for routing an OpenAI Agents SDK tool call through AgentTrust."""
+"""Run a Session-scoped OpenAI Agents adapter without an API key."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
-from agenttrust.interfaces.python_api import AgentTrustRuntime
+from agenttrust import AgentTrustRuntime
+from agenttrust.integrations.openai_agents import wrap_tools
 
 
-def execute_agent_tool(project_root: Path, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    """Use from a tool callback after normalizing the framework call arguments."""
-    result = AgentTrustRuntime(project_root, runtime_mode="interactive").execute(
-        tool_name,
-        arguments,
-        source="openai_agents_sdk",
-    )
-    outcome = result.outcome
-    return {
-        "run_id": result.run_id,
-        "status": outcome.result.status if outcome.result else outcome.final_permission.final_effect,
-        "output": outcome.result.output_preview if outcome.result else outcome.final_permission.reason,
-    }
+def lookup_release_note(component: str) -> str:
+    return f"{component}: session governance enabled"
+
+
+def main(project_root: Path | None = None) -> str:
+    """Use the dependency-free adapter path as a fake-model integration smoke test."""
+
+    runtime = AgentTrustRuntime(project_root or Path.cwd(), runtime_mode="test")
+    with runtime.session(actor_id="example-user", agent_id="openai-agents-example") as session:
+        [tool] = wrap_tools([lookup_release_note], session=session, default_effect="ask", native=False)
+        result = tool("AgentTrust Runtime")
+        session.finalize_answer(result)
+        return result
+
+
+if __name__ == "__main__":
+    print(main())

@@ -1,188 +1,46 @@
-# Refactor Roadmap
+# 重构路线图
 
-This roadmap turns the current working runtime into the layered architecture described in [Enterprise Architecture Upgrade](enterprise-architecture.md).
+本路线图记录架构演进的完成状态，而不是未来愿望清单。`v0.5.0` 已实现本地 Agent 执行控制的完整第一阶段。
 
-## Implementation Status
+## 已完成
 
-Completed in the first refactor increment:
+### v0.1.1 安全默认值与工程门禁
 
-- Phase 1 domain extraction: `ToolIntent`, `ToolResult`, policy rules, hook rules, and permission/sandbox decisions now live in `agenttrust.domain`.
-- Old `schemas.py` and `permissions.*` paths remain compatibility exports, so current CLI and library consumers keep working.
-- Import-boundary tests enforce that the domain has no CLI, YAML, subprocess, filesystem, or concrete-tool dependency.
+- 安全 `shell` 使用 argv 与 `shell=False`，默认 effect 改为 `ask`；危险兼容模式使用明确名称。
+- 未注册工具在权限阶段 fail closed。
+- 文档、optional extras、Windows/Linux 与 Python 3.11-3.13 CI、Ruff、Mypy、coverage、CodeQL 和 wheel smoke 对齐。
 
-Completed for Phase 2:
+### v0.2.0 Governed Session Runtime
 
-- `agenttrust.application` now defines explicit ports plus `RunToolUseCase`, `RunFixtureUseCase`, `BuildContextUseCase`, and `RestoreRunUseCase`.
-- The current fixture and live entrypoints compose `RunToolUseCase` with existing local adapters, preserving their evidence event sequence.
-- Application tests use in-memory ports; fixture and live execution compose the extracted tool use case.
+- 领域层加入 session、tool call、approval 与生命周期状态机。
+- 多调用 session 共享 run、身份、策略快照、facts 与 hash-linked evidence。
+- JSONL evidence 加 SQLite 投影，支持 state rebuild。
+- 审批持久化、参数摘要绑定、approve/deny、resume/cancel、超时和 final-answer 生命周期均已落地。
 
-Completed for Phase 3:
+### v0.3.0 易用集成
 
-- YAML policy loading, filesystem path sandboxing, JSONL evidence storage, and the local tool gateway now live under `agenttrust.adapters`.
-- Legacy `permissions.*` and `runtime.*` import paths remain thin compatibility facades.
-- Local file, shell, Git, MCP and skill handlers plus GroundGuard verification live in `agenttrust.adapters`; the CLI lives in `agenttrust.interfaces`.
+- `govern()` 与 `@governed_tool` 可保护普通同步 Python 函数。
+- OpenAI Agents、LangGraph、Pydantic AI adapters 重用外部 session。
+- 每个集成都有无 API key 的 fake-model 测试与可运行 example。
 
-Completed for Phase 4 baseline:
+### v0.4.0 真实 MCP Gateway
 
-- Each run records actor, agent, session, and an exact policy snapshot with a stable policy-version digest.
-- JSONL evidence events form a hash chain, verified through `agenttrust evidence verify <run_id>`.
-- Identity and policy metadata propagate to every evidence event; hash-chain verification and portable NDJSON evidence export are available.
+- stdio JSON-RPC transport、超时与协议错误的结构化结果。
+- Claude Code、Codex、Cursor、VS Code 与项目配置的静态发现。
+- consent、tool trust、command/schema fingerprint、drift invalidation 与 evidence 记录。
 
-Completed for Phase 5 baseline:
+### v0.5.0 可观测性与安全基准
 
-- Local MCP servers require an explicit persisted consent record outside deterministic test mode; grant it with `agenttrust mcp consent <server>`.
-- A trusted-server registry, tool allowlist, and sandbox profile are available through `agenttrust mcp trust <server> --tool <tool>`.
-- `AgentTrustRuntime` provides an embeddable Python SDK entrypoint for custom agent loops.
-- Framework adapter examples are available in `examples/openai_agents_sdk_adapter.py` and `examples/langgraph_tool_adapter.py`.
+- JSONL evidence 到 OpenTelemetry/OTLP 的重建 exporter。
+- `security-v1` 公开 100 例确定性安全基准，包含聚合误报、漏报与 latency 指标。
 
-Future extensions such as a networked policy service, native OpenTelemetry exporter, resumable remote approvals, and framework package integrations can build on these completed boundaries without changing the governed execution core.
-
-## Current Architecture Snapshot
-
-The current codebase is compact and testable:
+## 保持的架构规则
 
 ```text
-src/agenttrust/
-  cli.py
-  schemas.py
-  permissions/
-  runtime/
-  tools/
-  groundguard_adapter/
-  mcp_lite.py
-  skills_lite.py
-  memory_lite.py
-  context_lite.py
+domain        -> no adapter, CLI, YAML, filesystem, subprocess imports
+application   -> domain + ports only
+adapters      -> concrete side effects and external libraries
+interfaces    -> compose adapters and expose CLI / Python API
 ```
 
-Strengths:
-
-- deterministic fixtures;
-- clear CLI;
-- working permission/sandbox/trace/fact/report loop;
-- Roadmap Lite features are covered by tests;
-- GroundGuard integration exists.
-
-Remaining architectural debt:
-
-- fixture setup still owns skill, memory, context, and final-answer orchestration;
-- CLI directly invokes concrete helpers;
-- several concrete adapters still live under their original feature modules;
-- enterprise metadata such as actor/session/policy version is not yet modeled;
-- evidence is append-only, hash-linked, and independently verifiable; it is not remotely witnessed.
-
-## Target Package Map
-
-| Current Module | Target Layer | Migration Notes |
-| --- | --- | --- |
-| `schemas.py` | `domain/models.py` | Keep `schemas.py` as re-export during migration. |
-| `permissions/policy.py` | `domain/policy.py` + `adapters/policy/yaml_policy.py` | Split pure rules from YAML loading. |
-| `permissions/engine.py` | `application/policy_evaluator.py` | Depend on domain policy and tool registry port. |
-| `permissions/sandbox.py` | `adapters/sandbox/filesystem.py` | Expose `SandboxPort`. |
-| `runtime/fixtures.py` | `interfaces/fixtures.py` + `application/run_fixture.py` | Fixture specs should be input data, not orchestrator logic. |
-| `runtime/gateway.py` | `application/tool_gateway.py` + `adapters/tools/*` | Gateway should depend on `ToolExecutorPort`. |
-| `runtime/recovery.py` | `application/restore_run.py` + `adapters/evidence/jsonl_store.py` | Restore use case should read backups via evidence port. |
-| `runtime/trace.py` | `adapters/evidence/jsonl_store.py` | Later add hash-chain store. |
-| `groundguard_adapter/*` | `adapters/verification/groundguard.py` | Expose `FactVerifierPort`. |
-| `mcp_lite.py` | `adapters/mcp/config_inspector.py` | Later add consent/trust registry. |
-| `skills_lite.py` | `adapters/skills/local_loader.py` | Domain owns `SkillContract`. |
-| `memory_lite.py` / `context_lite.py` | `application/context_pack.py` + adapters | Context pack becomes a use case. |
-
-## Phase 1: Domain Extraction
-
-Deliverables:
-
-- `src/agenttrust/domain/models.py`
-- `src/agenttrust/domain/decisions.py`
-- `src/agenttrust/domain/policy.py`
-- compatibility re-exports from old modules
-- import-boundary tests
-
-Validation:
-
-```bash
-python -m pytest
-python -m pytest tests/test_architecture_boundaries.py
-```
-
-Done when:
-
-- no CLI behavior changes;
-- domain layer imports only standard library and domain modules;
-- current public imports still work.
-
-## Phase 2: Application Use Cases
-
-Deliverables:
-
-- `src/agenttrust/application/ports.py`
-- `src/agenttrust/application/run_tool.py`
-- `src/agenttrust/application/run_fixture.py`
-- `src/agenttrust/application/restore_run.py`
-- `src/agenttrust/application/build_context.py`
-
-Validation:
-
-- use-case tests run with in-memory adapters;
-- fixture tests still produce identical event types;
-- CLI uses application use cases instead of concrete helpers.
-
-## Phase 3: Adapter Split
-
-Deliverables:
-
-- `adapters/tools`
-- `adapters/policy`
-- `adapters/evidence`
-- `adapters/sandbox`
-- `adapters/verification`
-- `interfaces/cli.py`
-
-Validation:
-
-- application layer imports no concrete adapters;
-- adapters implement ports;
-- current CLI remains stable.
-
-## Phase 4: Enterprise Evidence
-
-Deliverables:
-
-- policy snapshot per run;
-- actor/session metadata;
-- evidence event hash chain;
-- `agenttrust evidence verify <run_id>`;
-- SIEM/OTel export adapter design.
-
-Validation:
-
-- tampering with one trace line fails evidence verification;
-- reports include actor/session/policy metadata;
-- recovery events are included in evidence verification.
-
-## Phase 5: Enterprise MCP And Framework Integration
-
-Deliverables:
-
-- MCP trusted server registry;
-- MCP consent record;
-- command allowlist and risk display;
-- framework adapter examples for OpenAI Agents SDK / LangGraph-style loops;
-- Python SDK entrypoint for custom loops.
-
-Validation:
-
-- local MCP command requires explicit consent before first use;
-- risky command patterns are surfaced before execution;
-- tool calls from framework adapters still produce identical AgentTrust artifacts.
-
-## Recommended Immediate PR
-
-Keep the first refactor small:
-
-1. Add `domain/models.py`.
-2. Re-export from `schemas.py`.
-3. Add `tests/test_architecture_boundaries.py`.
-4. Move no runtime behavior yet.
-
-This creates the architecture seam while keeping the risk low.
+下一阶段只在真实需求出现时扩展，例如更细的进程/网络 sandbox、更多稳定的 framework adapters 或 policy pack；不以 Dashboard、云服务或多语言 SDK 作为当前范围。

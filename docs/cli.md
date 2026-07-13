@@ -1,115 +1,82 @@
-# CLI Reference
+# CLI 参考
 
-AgentTrust's CLI is organized around one local project directory. Use `--project-root` when you need to run commands outside the project root.
+所有命令可附带 `--project-root <path>`。运行相关命令默认使用当前目录的 `.agenttrust/`。
 
-## Project Setup
+## 初始化与示例
 
-```bash
+```powershell
 agenttrust init
+agenttrust fixtures
+agenttrust run-fixture verified_answer --mode test
+agenttrust run-live fake_tool_request --mode interactive
+```
+
+`run-fixture` 提供可重复的权限、沙箱、事实、恢复、MCP 和上下文测试路径。模式为 `interactive`、`noninteractive` 或 `test`；只有 `test` 使用 mock approver。
+
+## Run 与证据
+
+```powershell
+agenttrust replay <run_id>
+agenttrust report <run_id> [--format markdown|html]
+agenttrust evidence verify <run_id>
+agenttrust evidence export <run_id>
+agenttrust evidence export-otel <run_id> --endpoint <otlp-http-url>
+agenttrust state rebuild
+```
+
+- `verify` 独立验证 JSONL hash chain。
+- `export` 写出便于摄取的 NDJSON。
+- `export-otel` 需要安装 `.[otel]`，从已有 evidence 重建 `agenttrust.session`、工具阶段和最终答案 span。
+- `state rebuild` 只从已验证 trace 重建 SQLite 投影。
+
+## 审批、恢复与策略
+
+```powershell
+agenttrust approvals list
+agenttrust approvals inspect <approval_id>
+agenttrust approvals approve <approval_id> --reason "reviewed" [--approver alice]
+agenttrust approvals deny <approval_id> --reason "unsafe"
+agenttrust run resume <run_id>
+agenttrust run cancel <run_id>
+agenttrust restore <run_id> [--file path] [--dry-run]
 agenttrust policy validate .agenttrust/policy.yaml
 ```
 
-## Fixtures
+审批决定写回 evidence 与 SQLite，且绑定原始 `arguments_digest`。`resume` 拒绝无效证据、缺失策略快照、未决审批或摘要不匹配的 run。
 
-```bash
-agenttrust fixtures
-agenttrust run-fixture <name>
-agenttrust run-fixture <name> --non-interactive
-agenttrust run-fixture <name> --mode interactive|noninteractive|test
-```
+## 工具与本地上下文
 
-Useful fixtures:
-
-| Fixture | What It Demonstrates |
-| --- | --- |
-| `blocked_secret` | Secret file read denied before execution. |
-| `ask_noninteractive` | `ask` becomes `deny` in noninteractive mode. |
-| `verified_answer` | Final answer is supported by recorded facts. |
-| `contradicted_answer` | Final answer contradicts a recorded fact. |
-| `unverified_answer` | Final answer omits required fact evidence. |
-| `mcp_tool_denied` | MCP wrapper defaults to `ask`, then denies in noninteractive mode. |
-| `mcp_tool_approved` | MCP wrapper executes after test-mode approval. |
-| `skill_code_review` | Local skill policy allows `git_diff`. |
-| `skill_blocked_tool` | Local skill policy blocks `shell`. |
-| `write_and_restore` | `write_file` backup and restore path. |
-| `blocked_by_hook` | `pre_tool` hook denies before sandbox/execution. |
-| `memory_context_pack` | Memory and Context Lite artifacts. |
-
-## Replay And Reports
-
-```bash
-agenttrust replay <run_id>
-agenttrust report <run_id>
-agenttrust report <run_id> --format html
-```
-
-## Tool Registry
-
-```bash
+```powershell
 agenttrust tools list
 agenttrust tools inspect shell
-agenttrust tools inspect mcp_tool
-```
-
-The registry exposes tool category, input schema, default permission effect, enabled state, and source.
-
-## MCP Lite
-
-```bash
-agenttrust mcp inspect .mcp.json
-```
-
-The inspector supports common MCP config shapes, reads UTF-8 files with or without BOM, lists server names, commands, args, env keys, tool names, schema hashes, and a simple risk level. It never prints env values.
-
-## Skill Lite
-
-```bash
+agenttrust hooks list
 agenttrust skills list
 agenttrust skills inspect code-review
-agenttrust run --skill code-review "review this repository"
-```
-
-The built-in demo skill lives at:
-
-```text
-.agenttrust/skills/code-review/
-  SKILL.md
-  policy.yaml
-```
-
-`run --skill` is a Lite demo path. It loads the selected local skill and proves tool-scope enforcement with deterministic fixture execution.
-
-## Recovery Lite
-
-```bash
-agenttrust restore <run_id>
-agenttrust restore <run_id> --dry-run
-agenttrust restore <run_id> --file src/app.py
-```
-
-Restore actions are also appended to the run trace. Existing files are restored from backup; files created by the run are deleted. Manifest paths are constrained to the project root and the run's `backups/` directory.
-
-## Hook Lite
-
-```bash
-agenttrust hooks list
-agenttrust run-fixture blocked_by_hook --mode test
-```
-
-Hooks run after the tentative permission decision and before sandboxing. They can only tighten the decision.
-
-## Memory And Context Lite
-
-```bash
-agenttrust memory add project "GroundGuard verifies final numeric claims."
-agenttrust memory add decision "Noninteractive ask is denied by default."
-agenttrust memory list
+agenttrust memory add project "Local policy is explicit."
 agenttrust memory inspect
-agenttrust memory clear --scope run
-
-agenttrust context build --skill code-review
+agenttrust context build --skill code-review --budget 4000
 agenttrust context preview --skill code-review --budget 4000
 agenttrust context export --run <run_id>
 ```
 
-Context packs include project memory, decisions, selected skill instruction/policy, policy summary, selected tool schemas, and recent run summaries.
+工具注册表提供默认 effect。未知工具在权限阶段被拒绝；`shell` 默认 `ask`，安全实现仅接受 argv。
+
+## MCP
+
+```powershell
+agenttrust mcp discover
+agenttrust mcp inspect <server-or-config-path>
+agenttrust mcp consent grant <server>
+agenttrust mcp trust <server> --tool read_file --tool search_docs
+agenttrust mcp consent revoke <server>
+```
+
+`discover` 和 `inspect` 只静态读取 Claude Code、Codex、Cursor、VS Code 与项目范围的配置；输出只列出环境变量 key。`trust` 在发现的真实 server 上先要求 consent，再使用 `tools/list` 保存允许工具的 command/schema 指纹。漂移会变成 `trust_stale` 并拒绝工具调用。
+
+## 安全基准
+
+```powershell
+agenttrust benchmark security --output benchmark-report.json
+```
+
+命令运行公开的 `security-v1` 100 例数据集，输出逐例结果和聚合安全指标。当出现 false negative 或 critical bypass 时退出码为 `2`。
