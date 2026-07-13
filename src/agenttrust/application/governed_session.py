@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Mapping, Sequence
 
 from agenttrust.application.ports import ApprovalJournalPort, EvidenceRecord, EvidenceRecorderPort
@@ -68,6 +69,7 @@ class GovernedSession:
         self._facts: list[EvidenceRecord] = list(initial_facts)
         self._final_answer_mode = final_answer_mode
         self._completion_blocked = False
+        self._operation_lock = RLock()
 
     @property
     def session(self) -> AgentSession:
@@ -90,6 +92,17 @@ class GovernedSession:
         return self._session
 
     def execute(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, object],
+        source: str = "python_sdk",
+    ) -> SessionToolRun:
+        """Serialize mutable session state across concurrent tool invocations."""
+
+        with self._operation_lock:
+            return self._execute(tool_name, arguments, source)
+
+    def _execute(
         self,
         tool_name: str,
         arguments: Mapping[str, object],
@@ -193,6 +206,18 @@ class GovernedSession:
         return FinalAnswerOutcome(completed=False, completion_action="completion_denied")
 
     def resume_tool_call(
+        self,
+        tool_call: SessionToolCall,
+        arguments: Mapping[str, object],
+        approval_response: str,
+        source: str = "approval_resume",
+    ) -> SessionToolRun:
+        """Serialize recovery with ordinary tool calls for this session instance."""
+
+        with self._operation_lock:
+            return self._resume_tool_call(tool_call, arguments, approval_response, source)
+
+    def _resume_tool_call(
         self,
         tool_call: SessionToolCall,
         arguments: Mapping[str, object],

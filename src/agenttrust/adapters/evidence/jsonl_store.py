@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from hashlib import sha256
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from agenttrust.domain.models import utc_now_iso
@@ -19,25 +20,28 @@ class TraceRecorder:
         self.trace_path = self.run_dir / "trace.jsonl"
         self._previous_hash = _last_event_hash(self.trace_path)
         self._context = dict(context or {})
+        self._lock = RLock()
 
     def bind(self, **context: Any) -> None:
         """Attach run-scoped governance metadata to subsequent evidence events."""
-        self._context.update({key: value for key, value in context.items() if value is not None})
+        with self._lock:
+            self._context.update({key: value for key, value in context.items() if value is not None})
 
     def append(self, event_type: str, **payload: Any) -> dict[str, Any]:
-        event = {
-            "event_type": event_type,
-            "created_at": utc_now_iso(),
-            **self._context,
-            **payload,
-        }
-        event["previous_hash"] = self._previous_hash
-        event["event_hash"] = _event_hash(event)
-        with self.trace_path.open("a", encoding="utf-8", newline="\n") as trace_file:
-            trace_file.write(json.dumps(event, ensure_ascii=False, sort_keys=True))
-            trace_file.write("\n")
-        self._previous_hash = str(event["event_hash"])
-        return event
+        with self._lock:
+            event = {
+                "event_type": event_type,
+                "created_at": utc_now_iso(),
+                **self._context,
+                **payload,
+            }
+            event["previous_hash"] = self._previous_hash
+            event["event_hash"] = _event_hash(event)
+            with self.trace_path.open("a", encoding="utf-8", newline="\n") as trace_file:
+                trace_file.write(json.dumps(event, ensure_ascii=False, sort_keys=True))
+                trace_file.write("\n")
+            self._previous_hash = str(event["event_hash"])
+            return event
 
 
 def read_trace(trace_path: Path) -> list[dict[str, Any]]:

@@ -6,6 +6,7 @@ import pytest
 
 from agenttrust import AgentTrustRuntime, ApprovalPending, govern, governed_tool
 from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_trace
+from agenttrust.cli import main
 
 
 def test_govern_runs_custom_tool_inside_an_existing_session(tmp_path) -> None:
@@ -50,3 +51,39 @@ def test_govern_preserves_pending_approval_without_executing_the_callable(tmp_pa
 
     assert called is False
     assert session.session.status == "waiting_approval"
+
+
+def test_governed_tool_can_be_reregistered_when_resuming_after_a_restart(tmp_path) -> None:
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="noninteractive")
+    called = False
+
+    def send_email(address: str) -> str:
+        nonlocal called
+        called = True
+        return address.upper()
+
+    with runtime.session(actor_id="alice") as session:
+        guarded_send = govern(send_email, session=session, tool_name="send_email", default_effect="ask")
+        with pytest.raises(ApprovalPending) as pending:
+            guarded_send("alice@example.com")
+
+    assert main(
+        [
+            "--project-root",
+            str(tmp_path),
+            "approvals",
+            "approve",
+            pending.value.approval_id,
+            "--reason",
+            "reviewed",
+        ]
+    ) == 0
+    with AgentTrustRuntime(tmp_path, runtime_mode="noninteractive").resume(
+        session.run_id,
+        resume_tools=[guarded_send],
+    ) as resumed:
+        outcome = resumed.resume_pending_approval()
+
+    assert called is True
+    assert outcome.outcome.result is not None
+    assert outcome.outcome.result.output_preview == "'ALICE@EXAMPLE.COM'"

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 from agenttrust import AgentTrustRuntime
 from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_trace
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
+from agenttrust.domain.models import ToolIntent, ToolResult
+from agenttrust.tools.registry import ToolSpec
 
 
 def test_python_sdk_executes_through_governed_pipeline(tmp_path: Path) -> None:
@@ -63,3 +67,37 @@ def test_python_sdk_session_records_approval_lifecycle_before_execution(tmp_path
     assert tool_statuses == ["requested", "waiting_approval", "approved", "executing", "succeeded"]
     session_statuses = [event["status"] for event in events if event["event_type"] == "session_status_changed"]
     assert session_statuses == ["running", "waiting_approval", "running", "completed"]
+
+
+def test_python_sdk_serializes_concurrent_tool_calls_and_keeps_trace_valid(tmp_path: Path) -> None:
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="test")
+    barrier = Barrier(3)
+
+    def handler(intent: ToolIntent, _project_root: Path) -> ToolResult:
+        return ToolResult(
+            run_id=intent.run_id,
+            tool_call_id=intent.tool_call_id,
+            tool_name=intent.tool_name,
+            status="ok",
+            output_preview="ok",
+        )
+
+    with runtime.session(actor_id="alice") as session:
+        session.register_tool(
+            ToolSpec(name="thread_probe", category="custom", input_schema={"index": "integer"}, default_effect="allow"),
+            handler,
+        )
+
+        def invoke(index: int):
+            barrier.wait()
+            return session.execute("thread_probe", {"index": index})
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(invoke, 1)
+            second = executor.submit(invoke, 2)
+            barrier.wait()
+            calls = [first.result(), second.result()]
+
+    assert sorted(call.tool_call.sequence for call in calls) == [1, 2]
+    assert {call.tool_call.tool_call_id for call in calls} == {"call_001", "call_002"}
+    assert verify_trace(session.run_dir / "trace.jsonl")["valid"] is True

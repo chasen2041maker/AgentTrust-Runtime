@@ -243,6 +243,8 @@ def _apply_approval_event(approval: ApprovalRequest, event: Mapping[str, Any]) -
     if decision == "approved":
         return approval.approve(approver_id, decision_reason, decided_at)
     if decision == "denied":
+        if decision_reason == "approval_expired":
+            return approval.expire(approver_id, decided_at)
         return approval.deny(approver_id, decision_reason, decided_at)
     raise ValueError(f"invalid approval decision: {decision}")
 

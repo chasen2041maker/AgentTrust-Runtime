@@ -9,7 +9,8 @@ import sqlite3
 import pytest
 
 from agenttrust import AgentTrustRuntime
-from agenttrust.adapters.evidence.jsonl_store import verify_trace
+from agenttrust.adapters.evidence.jsonl_store import _event_hash, read_trace, verify_trace
+from agenttrust.adapters.evidence.replay import replay_verified_run
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection, rebuild_state_from_traces
 from agenttrust.cli import main
 
@@ -21,6 +22,18 @@ def _create_waiting_write_session(project_root: Path, filename: str):
     assert pending.approval_request is not None
     assert session.session.status == "waiting_approval"
     return session, pending.approval_request
+
+
+def _write_rehashed_trace(trace_path: Path, events: list[dict[str, object]]) -> None:
+    previous_hash: str | None = None
+    for event in events:
+        event["previous_hash"] = previous_hash
+        event["event_hash"] = _event_hash(event)
+        previous_hash = event["event_hash"]
+    trace_path.write_text(
+        "".join(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n" for event in events),
+        encoding="utf-8",
+    )
 
 
 def test_cli_resume_rehydrates_waiting_session_after_approval(tmp_path: Path, capsys) -> None:
@@ -163,3 +176,55 @@ def test_resume_rebuilds_facts_from_verified_trace_not_mutable_ledger(tmp_path: 
         resumed.resume_pending_approval()
 
     assert (tmp_path / "facts-resumed.txt").read_text(encoding="utf-8") == "resumed"
+
+
+def test_resume_rejects_an_approval_that_expired_after_its_decision(tmp_path: Path, capsys) -> None:
+    session, approval = _create_waiting_write_session(tmp_path, "expired-resume.txt")
+    assert (
+        main(
+            [
+                "--project-root",
+                str(tmp_path),
+                "approvals",
+                "approve",
+                approval.approval_id,
+                "--reason",
+                "reviewed",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    trace_path = session.run_dir / "trace.jsonl"
+    events = read_trace(trace_path)
+    for event in events:
+        if event.get("approval_id") != approval.approval_id:
+            continue
+        if event.get("event_type") == "approval_requested":
+            event["expires_at"] = "2000-01-01T01:00:00Z"
+        if event.get("event_type") == "approval_decided":
+            event["expires_at"] = "2000-01-01T01:00:00Z"
+            event["decided_at"] = "2000-01-01T00:00:00Z"
+    _write_rehashed_trace(trace_path, events)
+
+    assert verify_trace(trace_path)["valid"] is True
+    with pytest.raises(ValueError, match="has expired"):
+        AgentTrustRuntime(tmp_path, runtime_mode="noninteractive").resume(session.run_id)
+
+
+def test_cancel_records_and_replays_an_expired_approval_denial(tmp_path: Path) -> None:
+    session, approval = _create_waiting_write_session(tmp_path, "expired-cancel.txt")
+    trace_path = session.run_dir / "trace.jsonl"
+    events = read_trace(trace_path)
+    for event in events:
+        if event.get("event_type") == "approval_requested" and event.get("approval_id") == approval.approval_id:
+            event["expires_at"] = "2000-01-01T01:00:00Z"
+    _write_rehashed_trace(trace_path, events)
+
+    cancelled = AgentTrustRuntime(tmp_path, runtime_mode="noninteractive").cancel(session.run_id)
+
+    replayed = replay_verified_run(session.run_dir)
+    assert cancelled.status == "cancelled"
+    assert replayed.session.status == "cancelled"
+    assert replayed.approvals[0].decision_reason == "approval_expired"

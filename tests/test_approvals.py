@@ -31,6 +31,28 @@ def test_approval_request_cannot_be_decided_twice() -> None:
         approved.deny("alice", "changed mind")
 
 
+def test_expired_approval_cannot_be_approved_or_denied_and_can_be_expired() -> None:
+    request = ApprovalRequest.create(
+        run_id="run_123",
+        tool_call_id="call_001",
+        tool_name="write_file",
+        arguments_digest="sha256:arguments",
+        reason="write requires approval",
+        requested_at="2000-01-01T00:00:00Z",
+        expires_at="2000-01-01T00:01:00Z",
+    )
+
+    assert request.is_expired("2000-01-01T00:01:00Z") is True
+    with pytest.raises(ValueError, match="has expired"):
+        request.approve("alice", "too late", "2000-01-01T00:02:00Z")
+    with pytest.raises(ValueError, match="has expired"):
+        request.deny("alice", "too late", "2000-01-01T00:02:00Z")
+
+    expired = request.expire("agenttrust", "2000-01-01T00:02:00Z")
+    assert expired.decision == "denied"
+    assert expired.decision_reason == "approval_expired"
+
+
 def test_persisted_approval_uses_trace_journal_sqlite_and_cli_decisions(tmp_path: Path, capsys) -> None:
     runtime = AgentTrustRuntime(tmp_path, runtime_mode="noninteractive")
 

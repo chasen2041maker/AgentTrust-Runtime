@@ -245,7 +245,14 @@ class AgentTrustRuntime:
             tool_gateway=tool_gateway,
         )
 
-    def resume(self, run_id: str, timeout_seconds: float | None = None) -> AgentTrustSession:
+    def resume(
+        self,
+        run_id: str,
+        timeout_seconds: float | None = None,
+        resume_tools: Sequence[object] = (),
+    ) -> AgentTrustSession:
+        """Resume a decided request, optionally re-registering custom governed tools."""
+
         if timeout_seconds is not None and timeout_seconds < 0:
             raise ValueError("timeout_seconds must be zero or greater")
         run_dir = self.project_root / ".agenttrust" / "runs" / run_id
@@ -261,6 +268,8 @@ class AgentTrustRuntime:
         if len(approvals) != 1:
             raise ValueError(f"tool call {tool_call.tool_call_id} must have exactly one approval request")
         approval = approvals[0]
+        if approval.is_expired():
+            raise ValueError(f"approval {approval.approval_id} has expired")
         if approval.is_pending:
             raise ValueError(f"approval {approval.approval_id} is still pending")
         policy_path = run_dir / "policy-snapshot.yaml"
@@ -269,6 +278,9 @@ class AgentTrustRuntime:
         if session.policy_version != policy_digest(policy_path.read_bytes()):
             raise ValueError(f"policy snapshot digest does not match verified session evidence for {run_id}")
         policy = load_policy(policy_path)
+        for resume_tool in resume_tools:
+            if not callable(getattr(resume_tool, "register", None)):
+                raise ValueError("resume tools must provide a callable register(session) attribute")
         recorder = TraceRecorder(run_dir)
         recorder.bind(
             actor_id=session.actor_id,
@@ -299,7 +311,7 @@ class AgentTrustRuntime:
             initial_facts=replayed.facts,
             final_answer_mode=policy.final_answer_mode,
         )
-        return AgentTrustSession(
+        restored_session = AgentTrustSession(
             governed_session,
             evidence,
             self.runtime_mode,
@@ -311,6 +323,11 @@ class AgentTrustRuntime:
             permission_engine=permission_engine,
             tool_gateway=tool_gateway,
         )
+        for resume_tool in resume_tools:
+            register = getattr(resume_tool, "register", None)
+            assert callable(register)
+            register(restored_session)
+        return restored_session
 
     def cancel(self, run_id: str, actor_id: str | None = None) -> AgentSession:
         run_dir = self.project_root / ".agenttrust" / "runs" / run_id
@@ -329,7 +346,11 @@ class AgentTrustRuntime:
         journal = JsonlApprovalJournal(run_dir)
         for approval in replayed.approvals:
             if approval.is_pending:
-                decided = approval.deny(actor_id or session.actor_id, "session_cancelled")
+                decided = (
+                    approval.expire(actor_id or session.actor_id)
+                    if approval.is_expired()
+                    else approval.deny(actor_id or session.actor_id, "session_cancelled")
+                )
                 journal.append(evidence.append("approval_decided", **decided.to_dict()))
         for tool_call in replayed.tool_calls:
             if tool_call.status == "waiting_approval":
