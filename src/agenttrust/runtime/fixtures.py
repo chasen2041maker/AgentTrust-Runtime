@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
+from agenttrust.adapters.policy.yaml_policy import snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
 from agenttrust.adapters.tools.gateway import ToolGateway
 from agenttrust.application.run_tool import RunToolUseCase
@@ -271,6 +272,8 @@ def run_fixture(
         fixture_name=fixture.name,
         runtime_mode=runtime_mode,
     )
+    snapshot_path, policy_version = snapshot_policy(project_root / ".agenttrust" / "policy.yaml", run_dir)
+    recorder.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
 
     if skill_info is not None:
         recorder.append(

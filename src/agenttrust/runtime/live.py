@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
+from agenttrust.adapters.policy.yaml_policy import snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
 from agenttrust.adapters.tools.gateway import ToolGateway
 from agenttrust.application.run_tool import RunToolUseCase
@@ -36,6 +37,8 @@ def run_live(name: str, project_root: Path, runtime_mode: str = "interactive") -
     )
 
     recorder.append("run_started", run_id=run_id, source="live_adapter", adapter=name, runtime_mode=runtime_mode)
+    snapshot_path, policy_version = snapshot_policy(project_root / ".agenttrust" / "policy.yaml", run_dir)
+    recorder.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
     intent = ToolIntent(
         run_id=run_id,
         tool_call_id="call_001",

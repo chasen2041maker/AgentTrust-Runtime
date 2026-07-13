@@ -43,6 +43,9 @@ def test_run_fixture_records_tool_path(tmp_path: Path, monkeypatch, capsys) -> N
     assert "sandbox_decision" in [event["event_type"] for event in events]
     assert "fact_mapped" in [event["event_type"] for event in events]
     assert "groundguard_check" in [event["event_type"] for event in events]
+    snapshot = next(event for event in events if event["event_type"] == "policy_snapshot")
+    assert str(snapshot["policy_version"]).startswith("sha256:")
+    assert (tmp_path / ".agenttrust" / "runs" / run_id / "policy-snapshot.yaml").exists()
     assert events[1]["tool_name"] == "shell"
     assert any(event.get("status") == "ok" for event in events)
 

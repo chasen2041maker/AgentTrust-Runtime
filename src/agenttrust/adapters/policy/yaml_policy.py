@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 
 import yaml
@@ -56,3 +57,11 @@ def load_policy(path: Path) -> Policy:
     if not isinstance(raw, dict):
         raise ValueError("policy file must contain a mapping")
     return Policy.from_dict(raw)
+
+
+def snapshot_policy(path: Path, run_dir: Path) -> tuple[Path, str]:
+    """Persist the exact policy text used by a run and return its version."""
+    text = path.read_text(encoding="utf-8") if path.exists() else DEFAULT_POLICY_TEXT
+    snapshot = run_dir / "policy-snapshot.yaml"
+    snapshot.write_text(text, encoding="utf-8", newline="\n")
+    return snapshot, "sha256:" + sha256(text.encode("utf-8")).hexdigest()
