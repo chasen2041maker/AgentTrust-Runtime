@@ -8,12 +8,14 @@
 
 [![CI](https://github.com/chasen2041maker/AgentTrust-Runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/chasen2041maker/AgentTrust-Runtime/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![Version](https://img.shields.io/badge/version-0.5.0-green)
+![Version](https://img.shields.io/badge/version-0.5.1-green)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 [快速开始](#快速开始) | [会话 API](#会话-api) | [MCP](#真实-mcp-网关) | [证据与可观测性](#证据与可观测性) | [安全基准](#安全基准) | [文档](#文档)
 
 </div>
+
+> **v0.5.1 Beta / 开发者预览**：适合本地开发、集成验证和确定性安全控制回归。它不是生产部署安全保证；接入真实系统前仍应完成独立威胁建模、权限配置审查和环境级防护。
 
 ## 它解决什么问题
 
@@ -97,7 +99,14 @@ agenttrust run cancel <run_id>
 agenttrust state rebuild
 ```
 
-审批请求绑定 `arguments_digest`。恢复前会先校验 hash chain、策略快照和原始参数摘要，防止“批准安全参数后再偷偷换参数”。
+审批请求绑定 `arguments_digest`。恢复和审批决策先校验 hash chain，再从已验证 trace 回放会话、工具调用、审批与事实；SQLite 只承担可重建的查询投影。恢复还会校验策略快照摘要、审批有效期和原始参数摘要，防止“批准安全参数后再偷偷换参数”。
+
+进程重启后恢复 `govern()` 包裹的自定义工具时，需要重新创建包装器并传给 `resume_tools`，使处理器显式回注册：
+
+```python
+with runtime.resume(run_id, resume_tools=[safe_send_email]) as session:
+    session.resume_pending_approval()
+```
 
 ## 一行接入现有工具
 
@@ -157,11 +166,12 @@ agenttrust mcp consent revoke <server>
 - `discover` 与 `inspect` 只读取配置，不启动 server，也不输出环境变量值。
 - 真实调用前必须有 server consent 与 tool-level trust。
 - 信任记录包含 command、description 和 input schema 的 hash；任一漂移都会把状态降为 `trust_stale`，后续调用被拒绝。
+- interactive 与 noninteractive 模式下，未找到 MCP 配置会返回错误，不会降级为成功的 mock；模拟仅在 test 模式或显式 `simulated: true` 时启用，并写入结果元数据。
 - stdio、超时和协议异常以结构化 `ToolResult` 和 evidence 记录，而非静默失败。
 
 ## 证据与可观测性
 
-JSONL 是不可变 evidence 源，SQLite 是可查询的状态投影。即使 `state.db` 丢失，也可从已验证 trace 重建。
+JSONL 是本地 hash-linked evidence 源，SQLite 是可查询、可重建的状态投影。恢复、恢复文件和 OTel 导出都会先验证 trace；即使 `state.db` 丢失，也可从已验证 trace 重建。
 
 ```powershell
 agenttrust evidence verify <run_id>
@@ -180,7 +190,7 @@ span 层级为 `agenttrust.session -> agenttrust.tool -> policy / approval / san
 
 ## 安全基准
 
-`security-v1` 是公开、确定性、可复现的 100 例攻击基准。运行时不会执行攻击 shell 命令，也不会启动用户配置的 MCP server；首个 MCP drift 用例只启动项目内置的 fake stdio server，以验证真实 fingerprint 路径。
+`security-v1` 是公开、确定性、可复现的 100 例安全控制回归套件。运行时不会执行攻击 shell 命令，也不会启动用户配置的 MCP server；首个 MCP drift 用例只启动项目内置的 fake stdio server，以验证真实 fingerprint 路径。它用于比较版本间的固定控制行为，不替代渗透测试、真实环境评估或生产安全结论。
 
 ```powershell
 agenttrust benchmark security --output benchmark-report.json

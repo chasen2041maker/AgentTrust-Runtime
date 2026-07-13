@@ -48,8 +48,8 @@ def test_release_metadata_and_readme_describe_the_current_runtime() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     readme = _read("README.md")
 
-    assert project["project"]["version"] == "0.5.0"
-    assert agenttrust.__version__ == "0.5.0"
+    assert project["project"]["version"] == "0.5.1"
+    assert agenttrust.__version__ == "0.5.1"
     for marker in (
         "AgentTrustSession",
         "真实 MCP 网关",
@@ -59,4 +59,5 @@ def test_release_metadata_and_readme_describe_the_current_runtime() -> None:
         "agenttrust benchmark security",
     ):
         assert marker in readme
+    assert "Beta / 开发者预览" in readme
     assert "36 passed" not in readme

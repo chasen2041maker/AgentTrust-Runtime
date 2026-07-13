@@ -44,7 +44,7 @@ ALLOWED_IMPORT_ROOTS = {
     "uuid",
     "agenttrust",
 }
-APPLICATION_ALLOWED_IMPORT_ROOTS = {"__future__", "dataclasses", "pathlib", "typing", "agenttrust"}
+APPLICATION_ALLOWED_IMPORT_ROOTS = {"__future__", "dataclasses", "pathlib", "threading", "typing", "agenttrust"}
 
 
 def _import_roots(source: str) -> set[str]:

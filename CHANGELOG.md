@@ -2,6 +2,20 @@
 
 All notable changes to AgentTrust Runtime are documented here.
 
+## 0.5.1 - 2026-07-13
+
+### Security
+
+- Dangerous shell controls now match normalized `argv` token patterns, and `unsafe_shell_command` is denied by default in every runtime mode.
+- Session resume, cancellation, and approval decisions replay lifecycle state from verified JSONL evidence instead of trusting SQLite; policy snapshots and recovered facts are verified against the trace.
+- Restore authorizations are derived from verified `backup_created` events, with backup content digests checked before writes.
+- MCP calls without configuration now fail outside test mode unless explicitly simulated; OpenTelemetry export verifies evidence before emitting spans.
+- Approval expiry is enforced for decisions and resume, per-session tool calls are serialized, and custom `govern()` handlers can be re-registered through `resume_tools`.
+
+### Changed
+
+- Documentation labels the release as a Beta/developer preview and describes `security-v1` as deterministic control regression rather than a production-security guarantee.
+
 ## 0.5.0 - 2026-07-13
 
 ### Added

@@ -2,6 +2,8 @@
 
 `security-v1` is a deterministic, local 100-case adversarial benchmark. It never runs a supplied shell command or a user-configured MCP server. Its first drift case launches only a packaged fake stdio server to exercise the real fingerprint check. Scratch artifacts are kept under `.agenttrust/benchmarks/security-v1/` by default.
 
+It is a deterministic security-control regression suite, not a penetration test or a production-safety guarantee.
+
 Run it from a project root:
 
 ```powershell
