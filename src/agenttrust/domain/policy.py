@@ -23,12 +23,23 @@ class PolicyRule:
     reason: str
     paths: tuple[str, ...] = ()
     command_patterns: tuple[str, ...] = ()
+    argv_patterns: tuple[tuple[str, ...], ...] = ()
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "PolicyRule":
         effect = str(raw.get("effect", "deny"))
         if effect not in VALID_EFFECTS:
             raise ValueError(f"invalid policy effect: {effect}")
+        raw_argv_patterns = raw.get("argv_patterns", ()) or ()
+        if not isinstance(raw_argv_patterns, (list, tuple)):
+            raise ValueError("argv_patterns must be a list of token lists")
+        argv_patterns: list[tuple[str, ...]] = []
+        for pattern in raw_argv_patterns:
+            if not isinstance(pattern, (list, tuple)) or not pattern:
+                raise ValueError("each argv pattern must be a non-empty token list")
+            if not all(isinstance(token, str) and token for token in pattern):
+                raise ValueError("argv pattern tokens must be non-empty strings")
+            argv_patterns.append(tuple(pattern))
         return cls(
             id=str(raw.get("id", "unnamed-rule")),
             tool=str(raw["tool"]),
@@ -36,6 +47,7 @@ class PolicyRule:
             reason=str(raw.get("reason", "")),
             paths=tuple(str(path) for path in raw.get("paths", ()) or ()),
             command_patterns=tuple(str(pattern) for pattern in raw.get("command_patterns", ()) or ()),
+            argv_patterns=tuple(argv_patterns),
         )
 
     def matches(self, intent: ToolIntent) -> bool:
@@ -46,13 +58,38 @@ class PolicyRule:
             if not isinstance(path_value, str):
                 return False
             normalized = path_value.replace("\\", "/")
-            return any(fnmatch(normalized, pattern.replace("\\", "/")) for pattern in self.paths)
+            if not any(fnmatch(normalized, pattern.replace("\\", "/")) for pattern in self.paths):
+                return False
         if self.command_patterns:
             command = intent.arguments.get("command")
             if not isinstance(command, str):
                 return False
-            return any(fnmatch(command, pattern) or pattern in command for pattern in self.command_patterns)
+            if not any(fnmatch(command, pattern) or pattern in command for pattern in self.command_patterns):
+                return False
+        if self.argv_patterns:
+            argv = _normalized_argv(intent.arguments.get("argv"))
+            if argv is None:
+                return False
+            if not any(_argv_pattern_matches(argv, pattern) for pattern in self.argv_patterns):
+                return False
         return True
+
+
+def _normalized_argv(raw_argv: object) -> tuple[str, ...] | None:
+    if not isinstance(raw_argv, list) or not raw_argv:
+        return None
+    if not all(isinstance(token, str) and token for token in raw_argv):
+        return None
+    return tuple(raw_argv)
+
+
+def _argv_pattern_matches(argv: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
+    """Match normalized argv tokens; a final ** permits extra trailing tokens."""
+
+    prefix = pattern[:-1] if pattern[-1] == "**" else pattern
+    if len(argv) < len(prefix) or (len(argv) != len(prefix) and pattern[-1] != "**"):
+        return False
+    return all(fnmatch(token, token_pattern) for token, token_pattern in zip(argv, prefix))
 
 
 @dataclass(frozen=True)

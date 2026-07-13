@@ -29,11 +29,16 @@ rules:
 
   - id: deny-dangerous-shell
     tool: shell
-    command_patterns:
-      - "rm -rf /"
-      - "mkfs"
-      - "curl * | sh"
-      - "wget * | sh"
+    argv_patterns:
+      - ["rm", "-rf", "/", "**"]
+      - ["rm", "-fr", "/", "**"]
+      - ["mkfs", "**"]
+      - ["sh", "-c", "**"]
+      - ["bash", "-c", "**"]
+      - ["cmd", "/c", "**"]
+      - ["cmd.exe", "/c", "**"]
+      - ["powershell", "-Command", "**"]
+      - ["pwsh", "-Command", "**"]
     effect: deny
     reason: "dangerous shell command"
 
@@ -67,4 +72,10 @@ def snapshot_policy(path: Path, run_dir: Path) -> tuple[Path, str]:
     text = path.read_text(encoding="utf-8") if path.exists() else DEFAULT_POLICY_TEXT
     snapshot = run_dir / "policy-snapshot.yaml"
     snapshot.write_text(text, encoding="utf-8", newline="\n")
-    return snapshot, "sha256:" + sha256(text.encode("utf-8")).hexdigest()
+    return snapshot, policy_digest(text.encode("utf-8"))
+
+
+def policy_digest(policy_bytes: bytes) -> str:
+    """Return the stable digest recorded as a policy snapshot version."""
+
+    return "sha256:" + sha256(policy_bytes).hexdigest()

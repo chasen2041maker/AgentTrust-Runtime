@@ -48,7 +48,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
         name="unsafe_shell_command",
         category="process",
         input_schema={"command": "string"},
-        default_effect="ask",
+        default_effect="deny",
         source="explicit_compatibility",
     ),
     "git_diff": ToolSpec(
