@@ -46,7 +46,7 @@ def test_run_fixture_records_tool_path(tmp_path: Path, monkeypatch, capsys) -> N
     snapshot = next(event for event in events if event["event_type"] == "policy_snapshot")
     assert str(snapshot["policy_version"]).startswith("sha256:")
     assert (tmp_path / ".agenttrust" / "runs" / run_id / "policy-snapshot.yaml").exists()
-    assert events[1]["tool_name"] == "shell"
+    assert next(event for event in events if event["event_type"] == "tool_intent")["tool_name"] == "shell"
     assert any(event.get("status") == "ok" for event in events)
 
 
