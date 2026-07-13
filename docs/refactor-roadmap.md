@@ -26,7 +26,7 @@ In progress for Phase 4:
 
 - Each run records actor, agent, session, and an exact policy snapshot with a stable policy-version digest.
 - JSONL evidence events form a hash chain, verified through `agenttrust evidence verify <run_id>`.
-- The remaining work is to propagate identity/policy metadata to every evidence event and expose reports through dedicated application use cases.
+- Identity and policy metadata now propagate to every evidence event; dedicated report use cases and telemetry exporters remain future extensions.
 
 In progress for Phase 5:
 
