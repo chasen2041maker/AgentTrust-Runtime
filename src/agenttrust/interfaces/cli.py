@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from agenttrust.context_lite import build_context_pack, export_context_to_run
+from agenttrust.benchmark.security import run_security_benchmark
 from agenttrust.adapters.mcp.runtime import list_server_tools
 from agenttrust.mcp_lite import (
     discover_mcp_servers,
@@ -139,6 +140,11 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_trust.add_argument("server")
     mcp_trust.add_argument("--tool", action="append", required=True)
     mcp_trust.add_argument("--sandbox-profile", choices=["strict", "standard"], default="strict")
+
+    benchmark_parser = subparsers.add_parser("benchmark", help="Run deterministic local security benchmarks.")
+    benchmark_subparsers = benchmark_parser.add_subparsers(dest="benchmark_command", required=True)
+    security_benchmark = benchmark_subparsers.add_parser("security", help="Run the versioned 100-case security benchmark.")
+    security_benchmark.add_argument("--output", help="Write the JSON report to this path.")
 
     skills_parser = subparsers.add_parser("skills", help="Skill Lite helpers.")
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
@@ -426,6 +432,14 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(path)
         return 0
+
+    if args.command == "benchmark" and args.benchmark_command == "security":
+        report = run_security_benchmark()
+        if args.output:
+            output_path = report.write_json((project_root / args.output).resolve())
+            print(output_path)
+        print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+        return 0 if report.false_negatives == 0 and report.critical_bypasses == 0 else 2
 
     if args.command == "skills":
         init_project(project_root)
