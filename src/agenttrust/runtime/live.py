@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
@@ -36,7 +37,16 @@ def run_live(name: str, project_root: Path, runtime_mode: str = "interactive") -
         store_facts=write_facts,
     )
 
-    recorder.append("run_started", run_id=run_id, source="live_adapter", adapter=name, runtime_mode=runtime_mode)
+    recorder.append(
+        "run_started",
+        run_id=run_id,
+        source="live_adapter",
+        adapter=name,
+        runtime_mode=runtime_mode,
+        actor_id=os.environ.get("AGENTTRUST_ACTOR_ID", "local-user"),
+        agent_id=os.environ.get("AGENTTRUST_AGENT_ID"),
+        session_id=os.environ.get("AGENTTRUST_SESSION_ID"),
+    )
     snapshot_path, policy_version = snapshot_policy(project_root / ".agenttrust" / "policy.yaml", run_dir)
     recorder.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
     intent = ToolIntent(

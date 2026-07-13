@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -271,6 +272,9 @@ def run_fixture(
         source="fixture",
         fixture_name=fixture.name,
         runtime_mode=runtime_mode,
+        actor_id=os.environ.get("AGENTTRUST_ACTOR_ID", "local-user"),
+        agent_id=os.environ.get("AGENTTRUST_AGENT_ID"),
+        session_id=os.environ.get("AGENTTRUST_SESSION_ID"),
     )
     snapshot_path, policy_version = snapshot_policy(project_root / ".agenttrust" / "policy.yaml", run_dir)
     recorder.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
