@@ -30,15 +30,16 @@ rules:
   - id: deny-dangerous-shell
     tool: shell
     argv_patterns:
-      - ["rm", "-rf", "/", "**"]
-      - ["rm", "-fr", "/", "**"]
-      - ["mkfs", "**"]
-      - ["sh", "-c", "**"]
-      - ["bash", "-c", "**"]
-      - ["cmd", "/c", "**"]
-      - ["cmd.exe", "/c", "**"]
-      - ["powershell", "-Command", "**"]
-      - ["pwsh", "-Command", "**"]
+      - ["rm", "**", "/", "**"]
+      - ["mkfs*", "**"]
+      - ["sh", "**", "-c", "**"]
+      - ["bash", "**", "-c", "**"]
+      - ["zsh", "**", "-c", "**"]
+      - ["dash", "**", "-c", "**"]
+      - ["cmd", "**", "/c", "**"]
+      - ["cmd.exe", "**", "/c", "**"]
+      - ["powershell", "**", "-command", "**"]
+      - ["pwsh", "**", "-command", "**"]
     effect: deny
     reason: "dangerous shell command"
 

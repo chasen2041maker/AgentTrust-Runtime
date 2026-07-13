@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
+import shlex
 from typing import Any
 
 from agenttrust.domain.models import ToolIntent
@@ -63,6 +64,9 @@ class PolicyRule:
         if self.command_patterns:
             command = intent.arguments.get("command")
             if not isinstance(command, str):
+                argv = _normalized_argv(intent.arguments.get("argv"))
+                command = shlex.join(argv) if argv is not None else None
+            if not isinstance(command, str):
                 return False
             if not any(fnmatch(command, pattern) or pattern in command for pattern in self.command_patterns):
                 return False
@@ -80,16 +84,29 @@ def _normalized_argv(raw_argv: object) -> tuple[str, ...] | None:
         return None
     if not all(isinstance(token, str) and token for token in raw_argv):
         return None
-    return tuple(raw_argv)
+    normalized = [token.replace("\\", "/") for token in raw_argv]
+    normalized[0] = normalized[0].rsplit("/", 1)[-1]
+    return tuple(token.lower() for token in normalized)
 
 
 def _argv_pattern_matches(argv: tuple[str, ...], pattern: tuple[str, ...]) -> bool:
-    """Match normalized argv tokens; a final ** permits extra trailing tokens."""
+    """Match normalized argv tokens; ** matches zero or more tokens anywhere."""
 
-    prefix = pattern[:-1] if pattern[-1] == "**" else pattern
-    if len(argv) < len(prefix) or (len(argv) != len(prefix) and pattern[-1] != "**"):
-        return False
-    return all(fnmatch(token, token_pattern) for token, token_pattern in zip(argv, prefix))
+    normalized_pattern = tuple(token.lower() for token in pattern)
+
+    def matches(argv_index: int, pattern_index: int) -> bool:
+        if pattern_index == len(normalized_pattern):
+            return argv_index == len(argv)
+        token_pattern = normalized_pattern[pattern_index]
+        if token_pattern == "**":
+            return any(matches(next_index, pattern_index + 1) for next_index in range(argv_index, len(argv) + 1))
+        return (
+            argv_index < len(argv)
+            and fnmatch(argv[argv_index], token_pattern)
+            and matches(argv_index + 1, pattern_index + 1)
+        )
+
+    return matches(0, 0)
 
 
 @dataclass(frozen=True)

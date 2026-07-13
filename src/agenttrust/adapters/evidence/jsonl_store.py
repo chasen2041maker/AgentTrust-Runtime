@@ -58,15 +58,22 @@ def read_trace(trace_path: Path) -> list[dict[str, Any]]:
 
 def verify_trace(trace_path: Path) -> dict[str, object]:
     """Verify the event hash chain independently of runtime execution."""
+
+    return verify_events(read_trace(trace_path))
+
+
+def verify_events(events: list[dict[str, Any]]) -> dict[str, object]:
+    """Verify an already-read event sequence to avoid verification/read races."""
+
     previous_hash: str | None = None
-    for index, event in enumerate(read_trace(trace_path), start=1):
+    for index, event in enumerate(events, start=1):
         actual_hash = event.get("event_hash")
         if event.get("previous_hash") != previous_hash:
             return {"valid": False, "event_index": index, "reason": "previous_hash_mismatch"}
         if not isinstance(actual_hash, str) or _event_hash(event) != actual_hash:
             return {"valid": False, "event_index": index, "reason": "event_hash_mismatch"}
         previous_hash = actual_hash
-    return {"valid": True, "event_count": len(read_trace(trace_path)), "head_hash": previous_hash}
+    return {"valid": True, "event_count": len(events), "head_hash": previous_hash}
 
 
 def _event_hash(event: dict[str, Any]) -> str:

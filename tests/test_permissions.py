@@ -98,6 +98,25 @@ def test_default_policy_denies_shell_interpreter_execution_argv(tmp_path: Path) 
     assert decision.rule_id == "deny-dangerous-shell"
 
 
+def test_default_policy_denies_normalized_shell_argv_bypass_variants(tmp_path: Path) -> None:
+    policy = load_policy(tmp_path / "missing-policy.yaml")
+    variants = (
+        ["rm", "-rf", "--no-preserve-root", "/"],
+        ["/bin/bash", "--noprofile", "-c", "echo unsafe"],
+        ["cmd.exe", "/C", "echo unsafe"],
+    )
+
+    for argv in variants:
+        intent = ToolIntent(
+            run_id="run",
+            tool_call_id="call",
+            tool_name="shell",
+            arguments={"argv": argv},
+            source="test",
+        )
+        assert PermissionEngine(policy).decide(intent).effect == "deny"
+
+
 def test_unsafe_shell_command_is_denied_even_in_test_mode() -> None:
     intent = ToolIntent(
         run_id="run",

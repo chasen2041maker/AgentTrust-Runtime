@@ -9,7 +9,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Mapping
 
-from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace, verify_trace
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace, verify_events
 from agenttrust.domain.models import ToolIntent, utc_now_iso
 
 
@@ -152,11 +152,12 @@ def restore_run(run_dir: Path, only_file: str | None = None, dry_run: bool = Fal
 
 def _backup_records_from_verified_trace(run_dir: Path) -> list[BackupRecord]:
     trace_path = run_dir / "trace.jsonl"
-    verification = verify_trace(trace_path)
+    events = read_trace(trace_path)
+    verification = verify_events(events)
     if verification["valid"] is not True:
         raise ValueError(f"cannot restore from invalid evidence: {verification.get('reason', 'unknown')}")
     records: list[BackupRecord] = []
-    for event in read_trace(trace_path):
+    for event in events:
         if event.get("event_type") != "backup_created":
             continue
         record = _backup_record_from_evidence(event)

@@ -7,7 +7,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, Mapping
 
-from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_trace
+from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_events
 
 
 def export_otel_trace(
@@ -23,10 +23,10 @@ def export_otel_trace(
     """
 
     trace_path = run_dir / "trace.jsonl"
-    verification = verify_trace(trace_path)
+    events = read_trace(trace_path)
+    verification = verify_events(events)
     if verification["valid"] is not True:
         raise ValueError(f"cannot export invalid evidence trace: {verification.get('reason', 'unknown')}")
-    events = read_trace(trace_path)
     if not events:
         return 0
     try:
@@ -164,6 +164,8 @@ def _tool_attributes(event: Mapping[str, object]) -> dict[str, object]:
 def _event_attributes(event: Mapping[str, object]) -> dict[str, object]:
     attributes = _tool_attributes(event)
     attributes["agenttrust.event_type"] = event.get("event_type", "")
+    metadata = event.get("metadata")
+    metadata_values = metadata if isinstance(metadata, Mapping) else {}
     for key in (
         "effect",
         "final_effect",
@@ -172,8 +174,10 @@ def _event_attributes(event: Mapping[str, object]) -> dict[str, object]:
         "approval_id",
         "decision",
         "mcp_transport",
+        "mcp_execution_mode",
+        "mcp_simulation_explicit",
     ):
-        value = event.get(key)
+        value = event.get(key, metadata_values.get(key))
         if isinstance(value, (str, bool, int, float)):
             attributes[f"agenttrust.{key}"] = value
     return attributes

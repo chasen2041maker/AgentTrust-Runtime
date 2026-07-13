@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
-from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_trace
+from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_events
 from agenttrust.adapters.verification.mapper import Fact
 from agenttrust.domain.approvals import ApprovalRequest
 from agenttrust.domain.lifecycle import SessionStatus, ToolCallStatus
@@ -35,10 +35,11 @@ def replay_verified_run(run_dir: Path) -> ReplayedRunState:
 
     run_dir = run_dir.resolve()
     trace_path = run_dir / "trace.jsonl"
-    verification = verify_trace(trace_path)
+    events = read_trace(trace_path)
+    verification = verify_events(events)
     if verification["valid"] is not True:
         raise ValueError(f"invalid evidence trace: {verification.get('reason', 'unknown')}")
-    return replay_events(read_trace(trace_path), expected_run_id=run_dir.name)
+    return replay_events(events, expected_run_id=run_dir.name)
 
 
 def replay_events(events: Sequence[Mapping[str, Any]], *, expected_run_id: str) -> ReplayedRunState:
