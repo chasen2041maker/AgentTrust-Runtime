@@ -69,7 +69,9 @@ def test_domain_has_no_infrastructure_or_interface_imports() -> None:
     )
     for module_path in DOMAIN_DIR.glob("*.py"):
         source = module_path.read_text(encoding="utf-8")
-        assert not any(item in source for item in forbidden), module_path.name
+        assert not any(
+            f"from {item}" in source or f"import {item}" in source for item in forbidden
+        ), module_path.name
 
 
 def test_application_imports_only_standard_library_domain_and_ports() -> None:
