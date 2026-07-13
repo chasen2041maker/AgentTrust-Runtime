@@ -16,7 +16,7 @@ from agenttrust.adapters.evidence.recovery import create_backup_for_write
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
 from agenttrust.adapters.policy.yaml_policy import load_policy, snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
-from agenttrust.adapters.tools.gateway import ToolGateway
+from agenttrust.adapters.tools.gateway import ToolGateway, ToolHandler
 from agenttrust.adapters.verification.mapper import Fact, map_tool_result, read_facts, write_facts
 from agenttrust.application.governed_session import GovernedSession, SessionToolRun
 from agenttrust.application.ports import EvidenceRecorderPort
@@ -29,6 +29,7 @@ from agenttrust.domain.sessions import AgentSession, SessionToolCall, arguments_
 from agenttrust.groundguard_adapter import CoverageReport, verify_answer, write_coverage_report
 from agenttrust.permissions import PermissionEngine, evaluate_pre_tool_hooks, finalize_permission, request_interactive_approval
 from agenttrust.runtime.fixtures import create_run_id
+from agenttrust.tools.registry import ToolSpec
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,8 @@ class AgentTrustSession:
         pending_tool_call: SessionToolCall | None = None,
         pending_approval: ApprovalRequest | None = None,
         timeout_seconds: float | None = None,
+        permission_engine: PermissionEngine | None = None,
+        tool_gateway: ToolGateway | None = None,
     ) -> None:
         self._governed_session = governed_session
         self._evidence = evidence
@@ -71,6 +74,8 @@ class AgentTrustSession:
         self._pending_tool_call = pending_tool_call
         self._pending_approval = pending_approval
         self._deadline = monotonic() + timeout_seconds if timeout_seconds is not None else None
+        self._permission_engine = permission_engine
+        self._tool_gateway = tool_gateway
         self._entered = False
 
     @property
@@ -108,7 +113,8 @@ class AgentTrustSession:
 
     def __exit__(self, exception_type, exception, traceback) -> None:
         if exception is not None:
-            self._governed_session.fail()
+            if self._governed_session.session.status != "waiting_approval":
+                self._governed_session.fail()
         elif self._has_timed_out():
             self._governed_session.timeout()
         else:
@@ -159,6 +165,12 @@ class AgentTrustSession:
             completion_action=outcome.completion_action,
         )
 
+    def register_tool(self, spec: ToolSpec, handler: ToolHandler) -> None:
+        if self._permission_engine is None or self._tool_gateway is None:
+            raise RuntimeError("session does not support dynamic tool registration")
+        self._tool_gateway.register(spec.name, handler)
+        self._permission_engine.register_tool_spec(spec)
+
     def _has_timed_out(self) -> bool:
         return self._deadline is not None and monotonic() >= self._deadline
 
@@ -201,6 +213,7 @@ class AgentTrustRuntime:
             policy_version=policy_version,
         )
         evidence = ProjectingTraceRecorder(recorder, SQLiteStateProjection(self.project_root))
+        tool_runner, permission_engine, tool_gateway = self._build_tool_runner(policy, evidence)
         governed_session = GovernedSession(
             session=AgentSession.create(
                 run_id=run_id,
@@ -209,7 +222,7 @@ class AgentTrustRuntime:
                 session_id=resolved_session_id,
                 policy_version=policy_version,
             ),
-            tool_runner=self._build_tool_runner(policy, evidence),
+            tool_runner=tool_runner,
             evidence=evidence,
             project_root=self.project_root,
             run_dir=run_dir,
@@ -220,7 +233,14 @@ class AgentTrustRuntime:
             final_answer_mode=policy.final_answer_mode,
         )
         evidence.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
-        return AgentTrustSession(governed_session, evidence, self.runtime_mode, timeout_seconds=timeout_seconds)
+        return AgentTrustSession(
+            governed_session,
+            evidence,
+            self.runtime_mode,
+            timeout_seconds=timeout_seconds,
+            permission_engine=permission_engine,
+            tool_gateway=tool_gateway,
+        )
 
     def resume(self, run_id: str, timeout_seconds: float | None = None) -> AgentTrustSession:
         if timeout_seconds is not None and timeout_seconds < 0:
@@ -273,9 +293,10 @@ class AgentTrustRuntime:
             approval_id=approval.approval_id,
             approval_decision=approval.decision,
         )
+        tool_runner, permission_engine, tool_gateway = self._build_tool_runner(policy, evidence)
         governed_session = GovernedSession(
             session=session,
-            tool_runner=self._build_tool_runner(policy, evidence),
+            tool_runner=tool_runner,
             evidence=evidence,
             project_root=self.project_root,
             run_dir=run_dir,
@@ -295,6 +316,8 @@ class AgentTrustRuntime:
             pending_tool_call=tool_call,
             pending_approval=approval,
             timeout_seconds=timeout_seconds,
+            permission_engine=permission_engine,
+            tool_gateway=tool_gateway,
         )
 
     def cancel(self, run_id: str, actor_id: str | None = None) -> AgentSession:
@@ -333,12 +356,16 @@ class AgentTrustRuntime:
         evidence.append("run_completed", run_id=run_id, status=cancelled.status)
         return cancelled
 
-    def _build_tool_runner(self, policy: Policy, evidence: EvidenceRecorderPort) -> RunToolUseCase:
-        return RunToolUseCase(
+    def _build_tool_runner(
+        self, policy: Policy, evidence: EvidenceRecorderPort
+    ) -> tuple[RunToolUseCase, PermissionEngine, ToolGateway]:
+        permission_engine = PermissionEngine(policy)
+        tool_gateway = ToolGateway()
+        tool_runner = RunToolUseCase(
             evidence=evidence,
-            policy_evaluator=PermissionEngine(policy),
+            policy_evaluator=permission_engine,
             sandbox=PathSandbox(self.project_root),
-            tool_executor=ToolGateway(),
+            tool_executor=tool_gateway,
             finalize_permission=finalize_permission,
             evaluate_hooks=evaluate_pre_tool_hooks,
             request_approval=request_interactive_approval,
@@ -346,6 +373,7 @@ class AgentTrustRuntime:
             map_facts=map_tool_result,
             store_facts=write_facts,
         )
+        return tool_runner, permission_engine, tool_gateway
 
     def execute(self, tool_name: str, arguments: dict[str, object], source: str = "python_sdk") -> PythonRunResult:
         run_id = create_run_id()
@@ -378,7 +406,8 @@ class AgentTrustRuntime:
             source=source,
             runtime_mode=self.runtime_mode,
         )
-        outcome = self._build_tool_runner(policy, recorder).execute(
+        tool_runner, _, _ = self._build_tool_runner(policy, recorder)
+        outcome = tool_runner.execute(
             intent,
             project_root=self.project_root,
             run_dir=run_dir,

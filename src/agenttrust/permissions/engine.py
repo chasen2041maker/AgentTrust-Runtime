@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from agenttrust.domain.decisions import PermissionDecision
 from agenttrust.domain.models import ToolIntent
 from agenttrust.domain.policy import Policy
-from agenttrust.tools.registry import get_tool_spec
+from agenttrust.tools.registry import ToolSpec, get_tool_spec
 
 
 class PermissionEngine:
     """Evaluate ToolIntent objects against policy rules."""
 
-    def __init__(self, policy: Policy) -> None:
+    def __init__(self, policy: Policy, tool_specs: Mapping[str, ToolSpec] | None = None) -> None:
         self.policy = policy
+        self._tool_specs = dict(tool_specs or {})
+
+    def register_tool_spec(self, spec: ToolSpec) -> None:
+        existing = self._tool_specs.get(spec.name)
+        if existing is not None and existing != spec:
+            raise ValueError(f"tool spec is already registered for {spec.name}")
+        self._tool_specs[spec.name] = spec
 
     def decide(self, intent: ToolIntent) -> PermissionDecision:
         ask_match: PermissionDecision | None = None
@@ -45,9 +54,13 @@ class PermissionEngine:
         )
 
     def _default_tool_decision(self, intent: ToolIntent) -> PermissionDecision:
-        try:
-            spec = get_tool_spec(intent.tool_name)
-        except ValueError:
+        spec = self._tool_specs.get(intent.tool_name)
+        if spec is None:
+            try:
+                spec = get_tool_spec(intent.tool_name)
+            except ValueError:
+                spec = None
+        if spec is None:
             return PermissionDecision(
                 run_id=intent.run_id,
                 tool_call_id=intent.tool_call_id,

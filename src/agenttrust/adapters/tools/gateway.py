@@ -34,6 +34,12 @@ class ToolGateway:
     def tool_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._tools))
 
+    def register(self, name: str, handler: ToolHandler) -> None:
+        existing = self._tools.get(name)
+        if existing is not None and existing is not handler:
+            raise ValueError(f"tool handler is already registered for {name}")
+        self._tools[name] = handler
+
     def execute(self, intent: ToolIntent, project_root: Path) -> ToolResult:
         handler = self._tools.get(intent.tool_name)
         if handler is None:
