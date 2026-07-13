@@ -17,6 +17,7 @@ from agenttrust.application.ports import (
     ToolExecutorPort,
 )
 from agenttrust.domain.decisions import FinalPermission, HookDecision, PermissionDecision, SandboxDecision
+from agenttrust.domain.lifecycle import ToolCallStatus
 from agenttrust.domain.models import ToolIntent, ToolResult
 from agenttrust.domain.policy import HookRule
 
@@ -24,6 +25,7 @@ from agenttrust.domain.policy import HookRule
 PermissionFinalizer = Callable[[PermissionDecision, str, str | None], FinalPermission]
 HookEvaluator = Callable[[ToolIntent, tuple[HookRule, ...]], HookDecision]
 ApprovalRequester = Callable[[PermissionDecision], str]
+ToolStatusObserver = Callable[[ToolCallStatus], None]
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,7 @@ class RunToolUseCase:
         runtime_mode: str,
         hooks: tuple[HookRule, ...] = (),
         facts_path: Path | None = None,
+        on_tool_call_status: ToolStatusObserver | None = None,
     ) -> ToolRunOutcome:
         self._evidence.append("tool_intent", **intent.to_dict())
         permission_decision = self._policy_evaluator.decide(intent)
@@ -84,6 +87,8 @@ class RunToolUseCase:
             self._evidence.append("hook_decision", **hook_decision.to_dict())
 
         approval_response = None
+        if permission_decision.effect == "ask" and on_tool_call_status is not None:
+            on_tool_call_status("waiting_approval")
         if (
             permission_decision.effect == "ask"
             and runtime_mode == "interactive"
@@ -114,6 +119,8 @@ class RunToolUseCase:
         }
         self._evidence.append("permission_decision", **permission_event)
         if final_permission.final_effect != "allow":
+            if on_tool_call_status is not None:
+                on_tool_call_status("policy_denied")
             return ToolRunOutcome(
                 intent=intent,
                 permission_decision=permission_decision,
@@ -124,9 +131,14 @@ class RunToolUseCase:
                 facts=(),
             )
 
+        if permission_decision.effect == "ask" and on_tool_call_status is not None:
+            on_tool_call_status("approved")
+
         sandbox_decision = self._sandbox.check(intent)
         self._evidence.append("sandbox_decision", **sandbox_decision.to_dict())
         if sandbox_decision.effect != "allow":
+            if on_tool_call_status is not None:
+                on_tool_call_status("sandbox_denied")
             return ToolRunOutcome(
                 intent=intent,
                 permission_decision=permission_decision,
@@ -142,8 +154,17 @@ class RunToolUseCase:
             if backup_record is not None:
                 self._evidence.append("backup_created", **backup_record.to_dict())
 
-        result = self._tool_executor.execute(intent, project_root)
+        if on_tool_call_status is not None:
+            on_tool_call_status("executing")
+        try:
+            result = self._tool_executor.execute(intent, project_root)
+        except Exception:
+            if on_tool_call_status is not None:
+                on_tool_call_status("failed")
+            raise
         self._evidence.append("tool_result", **result.to_dict())
+        if on_tool_call_status is not None:
+            on_tool_call_status("succeeded" if result.status == "ok" else "failed")
         facts = tuple(self._map_facts(result)) if self._map_facts is not None else ()
         if facts and facts_path is not None and self._store_facts is not None:
             self._store_facts(facts_path, facts)
