@@ -1,7 +1,7 @@
 """Built-in tool implementations."""
 
 from agenttrust.adapters.tools.file import read_file, write_file
-from agenttrust.tools.git import git_diff
+from agenttrust.adapters.tools.git import git_diff
 from agenttrust.tools.mcp import mcp_tool
 from agenttrust.tools.registry import ToolSpec, get_tool_spec, list_tool_specs
 from agenttrust.adapters.tools.shell import shell

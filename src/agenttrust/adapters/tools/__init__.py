@@ -1,5 +1,4 @@
-"""Local tool-execution adapters."""
+"""Local tool-execution adapters.
 
-from agenttrust.adapters.tools.gateway import ToolGateway
-
-__all__ = ["ToolGateway"]
+Import concrete adapters from their modules to avoid eager gateway/tool cycles.
+"""
