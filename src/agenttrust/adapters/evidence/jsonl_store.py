@@ -13,16 +13,22 @@ from agenttrust.domain.models import utc_now_iso
 class TraceRecorder:
     """Persist evidence events to `.agenttrust/runs/{run_id}/trace.jsonl`."""
 
-    def __init__(self, run_dir: Path) -> None:
+    def __init__(self, run_dir: Path, context: dict[str, Any] | None = None) -> None:
         self.run_dir = run_dir
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.trace_path = self.run_dir / "trace.jsonl"
         self._previous_hash = _last_event_hash(self.trace_path)
+        self._context = dict(context or {})
+
+    def bind(self, **context: Any) -> None:
+        """Attach run-scoped governance metadata to subsequent evidence events."""
+        self._context.update({key: value for key, value in context.items() if value is not None})
 
     def append(self, event_type: str, **payload: Any) -> dict[str, Any]:
         event = {
             "event_type": event_type,
             "created_at": utc_now_iso(),
+            **self._context,
             **payload,
         }
         event["previous_hash"] = self._previous_hash

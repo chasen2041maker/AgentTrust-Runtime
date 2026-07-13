@@ -39,6 +39,12 @@ class AgentTrustRuntime:
         policy_path = self.project_root / ".agenttrust" / "policy.yaml"
         policy = load_policy(policy_path)
         snapshot_path, policy_version = snapshot_policy(policy_path, run_dir)
+        recorder.bind(
+            actor_id=os.environ.get("AGENTTRUST_ACTOR_ID", "local-user"),
+            agent_id=os.environ.get("AGENTTRUST_AGENT_ID"),
+            session_id=os.environ.get("AGENTTRUST_SESSION_ID"),
+            policy_version=policy_version,
+        )
         recorder.append(
             "run_started",
             run_id=run_id,

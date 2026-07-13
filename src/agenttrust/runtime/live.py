@@ -26,6 +26,13 @@ def run_live(name: str, project_root: Path, runtime_mode: str = "interactive") -
     gateway = ToolGateway()
     permission_engine = PermissionEngine(load_policy(project_root / ".agenttrust" / "policy.yaml"))
     sandbox = PathSandbox(project_root)
+    snapshot_path, policy_version = snapshot_policy(project_root / ".agenttrust" / "policy.yaml", run_dir)
+    recorder.bind(
+        actor_id=os.environ.get("AGENTTRUST_ACTOR_ID", "local-user"),
+        agent_id=os.environ.get("AGENTTRUST_AGENT_ID"),
+        session_id=os.environ.get("AGENTTRUST_SESSION_ID"),
+        policy_version=policy_version,
+    )
     tool_runner = RunToolUseCase(
         evidence=recorder,
         policy_evaluator=permission_engine,
@@ -47,7 +54,6 @@ def run_live(name: str, project_root: Path, runtime_mode: str = "interactive") -
         agent_id=os.environ.get("AGENTTRUST_AGENT_ID"),
         session_id=os.environ.get("AGENTTRUST_SESSION_ID"),
     )
-    snapshot_path, policy_version = snapshot_policy(project_root / ".agenttrust" / "policy.yaml", run_dir)
     recorder.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
     intent = ToolIntent(
         run_id=run_id,

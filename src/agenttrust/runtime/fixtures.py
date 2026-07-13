@@ -253,6 +253,13 @@ def run_fixture(
     coverage_status: str | None = None
     skill_name = skill_override or fixture.skill
     skill_info = load_skill(project_root, skill_name) if skill_name else None
+    snapshot_path, policy_version = snapshot_policy(project_root / ".agenttrust" / "policy.yaml", run_dir)
+    recorder.bind(
+        actor_id=os.environ.get("AGENTTRUST_ACTOR_ID", "local-user"),
+        agent_id=os.environ.get("AGENTTRUST_AGENT_ID"),
+        session_id=os.environ.get("AGENTTRUST_SESSION_ID"),
+        policy_version=policy_version,
+    )
     tool_runner = RunToolUseCase(
         evidence=recorder,
         policy_evaluator=permission_engine,
@@ -276,7 +283,6 @@ def run_fixture(
         agent_id=os.environ.get("AGENTTRUST_AGENT_ID"),
         session_id=os.environ.get("AGENTTRUST_SESSION_ID"),
     )
-    snapshot_path, policy_version = snapshot_policy(project_root / ".agenttrust" / "policy.yaml", run_dir)
     recorder.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
 
     if skill_info is not None:
