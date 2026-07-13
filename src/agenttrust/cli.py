@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from agenttrust.context_lite import build_context_pack, export_context_to_run
-from agenttrust.mcp_lite import inspect_mcp_config
+from agenttrust.mcp_lite import grant_mcp_consent, inspect_mcp_config
 from agenttrust.memory_lite import add_memory, clear_memory, list_memory
 from agenttrust.adapters.policy.yaml_policy import DEFAULT_POLICY_TEXT, load_policy
 from agenttrust.runtime.fixtures import list_fixtures, run_fixture
@@ -90,6 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command", required=True)
     mcp_inspect = mcp_subparsers.add_parser("inspect", help="Inspect an MCP config.")
     mcp_inspect.add_argument("path")
+    mcp_consent = mcp_subparsers.add_parser("consent", help="Grant consent for a local MCP server.")
+    mcp_consent.add_argument("server")
 
     skills_parser = subparsers.add_parser("skills", help="Skill Lite helpers.")
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
@@ -246,6 +248,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"invalid MCP config: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "mcp" and args.mcp_command == "consent":
+        print(grant_mcp_consent(project_root, args.server))
         return 0
 
     if args.command == "skills":

@@ -7,11 +7,21 @@ import json
 from pathlib import Path
 
 from agenttrust.domain.models import ToolIntent, ToolResult
+from agenttrust.mcp_lite import has_mcp_consent
 
 
 def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
     server = intent.arguments.get("server", "unknown")
     tool = intent.arguments.get("tool", "unknown")
+    if intent.runtime_mode != "test" and not has_mcp_consent(project_root, str(server)):
+        return ToolResult(
+            run_id=intent.run_id,
+            tool_call_id=intent.tool_call_id,
+            tool_name=intent.tool_name,
+            status="error",
+            error=f"MCP server '{server}' requires explicit consent",
+            metadata={"mcp_server_name": str(server), "consent_required": True},
+        )
     payload = {
         "server": server,
         "tool": tool,

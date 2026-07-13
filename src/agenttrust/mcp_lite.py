@@ -8,6 +8,27 @@ from pathlib import Path
 from typing import Any
 
 
+def grant_mcp_consent(project_root: Path, server_name: str, actor_id: str = "local-user") -> Path:
+    """Persist explicit consent for a local MCP server."""
+    path = project_root / ".agenttrust" / "mcp-consent.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records = _consent_records(path)
+    records[server_name] = {"actor_id": actor_id}
+    path.write_text(json.dumps(records, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def has_mcp_consent(project_root: Path, server_name: str) -> bool:
+    return server_name in _consent_records(project_root / ".agenttrust" / "mcp-consent.json")
+
+
+def _consent_records(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return raw if isinstance(raw, dict) else {}
+
+
 def inspect_mcp_config(path: Path) -> dict[str, Any]:
     raw = json.loads(path.read_text(encoding="utf-8-sig"))
     servers = raw.get("mcpServers", raw.get("servers", raw))
