@@ -30,7 +30,7 @@ class ProjectingTraceRecorder:
         except sqlite3.Error:
             # SQLite is a disposable cache; rebuild it from authoritative JSONL.
             try:
-                self._projection.rebuild()
+                self._projection.rebuild_run(self._recorder.run_dir)
             except (OSError, sqlite3.Error):
                 pass
         return event

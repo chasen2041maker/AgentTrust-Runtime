@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agenttrust-runtime"
-version = "0.5.2"
+version = "0.6.0"
 description = "Local-first runtime for governed agent tool execution."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,6 +23,7 @@ test = [
   "ruff>=0.6",
   "mypy>=1.10",
   "build>=1.2",
+  "jsonschema>=4.0",
 ]
 groundguard = ["groundguard-ai>=0.1"]
 otel = [
@@ -46,6 +47,12 @@ agenttrust = "agenttrust.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agenttrust"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"schemas" = "agenttrust/protocol_schemas"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/agenttrust", "schemas", "README.md", "README_zh.md", "CHANGELOG.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

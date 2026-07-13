@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenttrust.dev/schemas/evidence-v1.schema.json",
+  "title": "AgentTrust Evidence Envelope v1",
+  "type": "object",
+  "required": ["schema_version", "event_id", "event_type", "event_sequence", "run_id", "subject", "payload", "created_at", "previous_hash", "event_hash"],
+  "properties": {
+    "schema_version": {"const": "agenttrust.evidence/v1"},
+    "event_id": {"type": "string", "minLength": 1},
+    "event_type": {"type": "string", "minLength": 1},
+    "event_sequence": {"type": "integer", "minimum": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "subject": {"type": "object"},
+    "payload": {"type": "object"},
+    "created_at": {"type": "string", "minLength": 1},
+    "previous_hash": {"type": ["string", "null"]},
+    "event_hash": {"type": "string", "pattern": "^sha256:"}
+  }
+}

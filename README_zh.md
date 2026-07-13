@@ -33,7 +33,7 @@
 
 ![AgentTrust Runtime 控制流程](docs/assets/runtime-flow.svg)
 
-> **v0.5.2 Beta / 开发者预览**：适合本地开发、集成验证和确定性控制回归。它不是生产安全保证；连接真实系统前仍需完成权限审查、独立威胁建模和环境级防护。
+> **v0.6.0 Beta / 开发者预览**：适合本地开发、集成验证和确定性控制回归。它不是生产安全保证；连接真实系统前仍需完成权限审查、独立威胁建模和环境级防护。
 
 ## AgentTrust 是什么？
 
@@ -77,6 +77,7 @@ Evidence 校验的预期输出：
 
 ```text
 trace.jsonl             # 本地、append-oriented、hash-linked 的事件源
+trace-head.json          # 已验证 trace 头部的追加检查点
 policy-snapshot.yaml    # 本次运行实际使用的策略文本
 facts.jsonl             # 有工具事实时生成的结构化账本
 groundguard-report.json # 调用 finalize_answer() 后生成的核验结果
@@ -114,6 +115,39 @@ agenttrust approvals list
 agenttrust approvals inspect <approval_id>
 agenttrust approvals approve <approval_id> --reason "reviewed"
 agenttrust run resume <run_id>
+```
+
+## V0.6：策略协议与异步运行时
+
+v0.6 保持现有 YAML 策略格式，同时提供可移植的 `DecisionRequest`、`DecisionResponse` 与 `Obligation` 协议对象。`policy explain` 会展示所有命中规则、工具默认值和最终优先级；`lint` 与 `test` 可以直接放入 CI。
+
+```powershell
+agenttrust policy lint .agenttrust/policy.yaml
+agenttrust policy test .agenttrust/policy.yaml policy-fixtures.json
+agenttrust policy explain .agenttrust/policy.yaml --tool write_file --path src/report.py
+```
+
+宿主框架已经使用事件循环时，可以使用异步会话。原生 async 工具会被直接 `await`，内建同步工具仍由网关兼容层提供。
+
+```python
+from agenttrust import AgentTrustRuntime, govern_async
+
+runtime = AgentTrustRuntime(Path("."), runtime_mode="test")
+
+async with runtime.async_session(actor_id="alice") as session:
+    async def summarize(text: str) -> str:
+        return text.upper()
+
+    governed_summarize = govern_async(
+        summarize, session=session, tool_name="summarize", default_effect="allow"
+    )
+    assert await governed_summarize("ready") == "READY"
+```
+
+一个 session 可以同时保存多个待审批调用。审批后，存在多个候选调用时用 `tool_call_id` 精确恢复：
+
+```powershell
+agenttrust run resume <run_id> --tool-call-id call_002
 ```
 
 开发安装和测试命令见 [贡献指南](CONTRIBUTING.md)。
@@ -192,7 +226,7 @@ agenttrust mcp trust <server> --tool read_file
 
 ![Evidence 报告示例](docs/assets/evidence-report-preview.svg)
 
-Evidence 事件是带前序事件 hash 的 append-oriented JSONL 记录。`agenttrust evidence verify` 会在 replay、restore 或 OpenTelemetry 导出前验证 trace；`agenttrust state rebuild` 可从已验证 trace 重建本地 SQLite 投影。
+Evidence 事件是带前序 hash 的 append-oriented JSONL 记录。新的 v1 事件带有可移植 envelope，读取已验证的 v0.5 trace 时会在内存中完成兼容迁移。`trace-head.json` 让正常追加不随历史事件数线性变慢；检查点缺失或陈旧时会回退到完整验证。`agenttrust evidence verify` 会在 replay、restore 或 OpenTelemetry 导出前验证 trace；`agenttrust state rebuild` 可从已验证 trace 重建本地 SQLite 投影。
 
 对受控的 `write_file`，运行时只会在写入成功后记录恢复点，并绑定实际写后 digest。恢复默认只预览；目标文件在运行后被修改时会跳过，除非显式使用 `--force`。
 
@@ -258,7 +292,7 @@ JSON 报告包含 case ID、预期与实际结果、类别计数和 policy laten
 
 - 会话级执行、持久化审批记录，以及从已验证本地 evidence replay。
 - 本地 MCP stdio 的 consent、tool trust 和 drift 检查。
-- Hash-linked evidence、SQLite 投影重建、报告生成和 OTLP 导出。
+- 版本化策略与 evidence 协议、异步会话执行、hash-linked evidence、SQLite 投影重建、报告生成和 OTLP 导出。
 - GroundGuard 支持的最终答案必需事实检查。
 
 已知限制：
@@ -272,13 +306,14 @@ JSON 报告包含 case ID、预期与实际结果、类别计数和 policy laten
 
 ## 路线图
 
-下一阶段会聚焦更强的 evidence anchoring、OS 级 MCP 隔离，以及更广泛的 policy pack 互操作性。完整的实施历史和计划边界见[重构路线图](docs/refactor-roadmap.md)与[企业架构方案](docs/enterprise-architecture.md)。
+下一阶段会聚焦外部 evidence anchoring、OS 级 MCP 隔离，以及更广泛的 policy pack 互操作性。完整的实施历史和计划边界见[重构路线图](docs/refactor-roadmap.md)与[企业架构方案](docs/enterprise-architecture.md)。
 
 ## 文档
 
 - [快速入门](docs/getting-started.md)
 - [CLI 参考](docs/cli.md)
 - [核心概念](docs/concepts.md)
+- [协议与异步运行时](docs/protocols.md)
 - [运行时架构](docs/ARCHITECTURE.md)
 - [威胁模型](docs/THREAT_MODEL.md)
 - [相关工作与边界](docs/RELATED_WORK.md)

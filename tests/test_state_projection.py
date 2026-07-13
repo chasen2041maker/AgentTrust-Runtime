@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, _event_hash
 from agenttrust.adapters.evidence.projecting_recorder import ProjectingTraceRecorder
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection, rebuild_state_from_traces
 from agenttrust.cli import main
@@ -165,6 +165,30 @@ def test_rebuild_rejects_a_valid_hash_chain_with_invalid_lifecycle(tmp_path: Pat
 
     with pytest.raises(ValueError, match="created -> completed"):
         rebuild_state_from_traces(tmp_path)
+
+
+def test_rebuild_run_rolls_back_when_lifecycle_projection_fails(tmp_path: Path) -> None:
+    run_id = "run_atomic"
+    _record_session_trace(tmp_path, run_id)
+    run_dir = tmp_path / ".agenttrust" / "runs" / run_id
+    projection = SQLiteStateProjection(tmp_path)
+    projection.rebuild_run(run_dir)
+    assert projection.get_session(run_id)["status"] == "completed"
+
+    events = [json.loads(line) for line in (run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    session_status = next(event for event in events if event["event_type"] == "session_status_changed")
+    session_status["status"] = "completed"
+    previous_hash = None
+    for event in events:
+        event["previous_hash"] = previous_hash
+        event["event_hash"] = _event_hash(event)
+        previous_hash = event["event_hash"]
+    (run_dir / "trace.jsonl").write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="created -> completed"):
+        projection.rebuild_run(run_dir)
+
+    assert projection.get_session(run_id)["status"] == "completed"
 
 
 def test_state_rebuild_cli_uses_the_jsonl_evidence_source(tmp_path: Path, capsys) -> None:

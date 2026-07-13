@@ -1,6 +1,6 @@
 # 重构路线图
 
-本路线图记录架构演进的完成状态，而不是未来愿望清单。`v0.5.2` 完成了本地 Agent 执行控制第二阶段的安全正确性收敛；当前发布仍是 Beta/开发者预览。
+本路线图记录架构演进的完成状态，而不是未来愿望清单。`v0.6.0` 完成了策略协议、异步运行时、多待审审批与 evidence/SQLite 性能收敛；当前发布仍是 Beta/开发者预览。
 
 ## 已完成
 
@@ -47,6 +47,15 @@
 - 模拟工具结果和事实来源显式标记，普通最终答案只接受可信事实；GroundGuard 可配置为严格必需。
 - replay、报告、NDJSON、恢复和 OTel 只消费已验证 evidence 快照；写入成功后才生成带写后摘要的恢复点。
 - 跨平台 run lock 覆盖 append、resume、cancel、审批决定和恢复的完整状态转换；CI 覆盖所有 optional extras。
+
+### v0.6.0 Policy Protocol & Async Runtime
+
+- 增加 `DecisionRequest`、`DecisionResponse`、`Obligation` 和 Policy/Evidence/ToolSpec v1 schema 与 conformance fixture。
+- 增加 `policy lint/test/explain`，输出规则冲突诊断、fixture 结果和可审计的优先级解释。
+- 增加 `AsyncToolExecutorPort`、`async_session()`、`execute_async()`、`async_resume()`、`govern_async()` 与异步 decorator。
+- 一个 session 可保持多个待审调用；审批后可通过 `tool_call_id` 独立恢复。
+- 新 evidence 使用 v1 envelope；`trace-head.json` 避免 append 的重复全量扫描，旧 trace 在已验证读取中兼容迁移。
+- SQLite 对普通路径增量投影，恢复、取消和审批只重建目标 run；全局 rebuild 保留为显式维护命令。
 
 ## 保持的架构规则
 

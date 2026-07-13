@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenttrust.dev/schemas/tool-spec-v1.schema.json",
+  "title": "AgentTrust Tool Specification v1",
+  "type": "object",
+  "required": ["schema_version", "name", "category", "input_schema", "default_effect", "source"],
+  "properties": {
+    "schema_version": {"const": "agenttrust.tool-spec/v1"},
+    "name": {"type": "string", "minLength": 1},
+    "category": {"type": "string", "minLength": 1},
+    "input_schema": {"type": "object"},
+    "default_effect": {"enum": ["allow", "ask", "deny"]},
+    "source": {"type": "string", "minLength": 1}
+  }
+}

@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+TOOL_SPEC_SCHEMA_VERSION = "agenttrust.tool-spec/v1"
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
@@ -16,6 +19,7 @@ class ToolSpec:
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "schema_version": TOOL_SPEC_SCHEMA_VERSION,
             "name": self.name,
             "category": self.category,
             "input_schema": self.input_schema,

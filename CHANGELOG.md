@@ -2,6 +2,23 @@
 
 All notable changes to AgentTrust Runtime are documented here.
 
+## 0.6.0 - 2026-07-13
+
+### Added
+
+- Versioned policy protocol objects: `DecisionRequest`, `DecisionResponse`, `Obligation`, and portable principal/action/resource/context records.
+- Standalone v1 JSON Schema documents and conformance fixtures for policy, evidence, tool specifications, and decision requests.
+- `agenttrust policy lint`, `agenttrust policy test`, and `agenttrust policy explain` for static conflicts, fixture evaluation, and precedence diagnostics.
+- Native async governance APIs: `async_session()`, `execute_async()`, `async_resume()`, `govern_async()`, and `@governed_async_tool`.
+- Multiple deferred approvals in one session, with independent resume through `tool_call_id`.
+
+### Changed
+
+- New evidence events use the `agenttrust.evidence/v1` envelope and retain a compatible flat projection for existing replay consumers. Verified reads migrate legacy v0.5 events in memory.
+- `trace-head.json` records the verified head, file size, and modification time so normal appends avoid an O(n) trace scan. Missing or stale checkpoints fall back to full hash-chain verification.
+- SQLite projection recovery now rebuilds only the target run. Fresh sessions project events incrementally and no longer scan every historical run at startup.
+- Tool specifications expose `agenttrust.tool-spec/v1` in their serialized form.
+
 ## 0.5.2 - 2026-07-13
 
 ### Security

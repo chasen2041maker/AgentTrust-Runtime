@@ -1,42 +1,45 @@
 # 核心概念
 
-## AgentSession
+## AgentSession 与 SessionToolCall
 
-`AgentSession` 是一个完整 Agent 任务的边界。它包含 `run_id`、`actor_id`、可选 `agent_id`、`session_id`、`policy_version` 与生命周期状态。一个 session 内可连续调用多个工具，共享 evidence chain、fact ledger 和 policy snapshot。
+`AgentSession` 是一个完整 Agent 任务的边界，包含 `run_id`、actor/agent/session 身份、策略快照摘要和生命周期状态。`SessionToolCall` 记录同一 session 内的递增调用序号、工具、参数摘要和状态。
 
-## ToolIntent 与 SessionToolCall
+`waiting_approval` 表示 session 中至少有一个调用等待审批，而不是冻结整个 session。可以继续提交其他工具调用并同时得到多个审批请求；恢复时使用 `tool_call_id` 精确选择目标调用。
 
-`ToolIntent` 是进入治理路径的标准化请求：工具名、参数、来源、运行模式、run 与 tool call ID。`SessionToolCall` 额外保留递增 sequence、参数摘要和生命周期状态。参数摘要是审批恢复的防替换绑定。
+## Policy Protocol v1
 
-## Policy、PermissionDecision 与 FinalPermission
+`DecisionRequest` 是策略求值的可移植输入：
 
-策略规则首先给出 `allow`、`ask`、`deny` 的 `PermissionDecision`。`deny > ask > allow > 工具默认值`，但未注册工具和注册表硬拒绝不能被 `allow` 升权。运行时模式与审批模式共同把它变为可执行 `FinalPermission`：
+- `principal`：actor、agent 和角色。
+- `action`：调用类型、工具与风险等级。
+- `resource`：主要资源标识和分类。
+- `context`：session、运行模式和 sandbox profile。
+- `arguments_digest`：原始参数的稳定摘要。
+- `attributes`：内置 YAML matcher 所需的最小可见属性，例如 path、command、argv、server 和 tool。
 
-| 模式 | `ask` 的最终结果 |
-| --- | --- |
-| `deferred` | 暂停为 `waiting_approval`，持久化后等待批准或拒绝。 |
-| `inline_prompt` | 显式在当前终端询问批准或拒绝。 |
-| `deny` | 拒绝，reason 为 `approval_required`。 |
-| `mock` | 仅 test 模式使用的确定性 mock approver。 |
+`DecisionResponse` 返回 `allow`、`ask` 或 `deny`，并携带命中规则、最终规则 ID 和 obligations。内置优先级是 `policy deny > registry deny > policy ask > policy allow > tool default`；未注册工具和注册表硬拒绝不能被策略 allow 提升。
 
-没有匹配规则时，Tool Registry 的默认 effect 作为安全回退；没有注册的工具直接拒绝。
+## 审批
 
-## ApprovalRequest
+`ApprovalRequest` 绑定 `approval_id`、run/tool call、脱敏参数预览、`arguments_digest`、规则、原因、TTL 与决定信息。批准或拒绝都写入 evidence；恢复前会重放已验证 trace，而不会信任可变 SQLite 缓存。
 
-审批请求记录 `approval_id`、run/tool call、工具、`arguments_digest`、脱敏参数视图、命中规则、原因、TTL、时间、决定与 approver。它可以在进程重启后由 `agenttrust approvals` 决定，随后使用 `agenttrust run resume` 恢复同一调用。
+## Evidence v1 与 SQLite
 
-## Evidence 与 SQLite 投影
+`trace.jsonl` 是 append-only、hash-linked evidence。v1 事件包含 `schema_version`、`event_id`、`event_sequence`、`subject` 和 `payload`，同时保留兼容的扁平字段；已验证读取会将 v0.5 事件迁移为同一内存形态。
 
-`trace.jsonl` 是 append-only、hash-linked evidence。每次追加都会在跨平台 run lock 内重新验证当前头部；`state.db` 仅提供可查询的 session、tool call 和 approval 投影。`agenttrust evidence verify` 验证链，`agenttrust state rebuild` 从有效 evidence 重新生成投影。
+`trace-head.json` 保存已验证 head、文件大小和修改时间。正常 append 只检查检查点与尾事件，避免随 trace 长度增长而重复扫描；检查点缺失或陈旧时会完整验证 hash chain。`state.db` 是查询投影：新事件增量投影，恢复/审批只重建当前 run，`agenttrust state rebuild` 才重建全部 run。
 
-## Facts 与 FinalAnswerResult
+## 同步与异步 API
 
-工具成功后，显式 `AGENTTRUST_FACTS` block 与可靠 metadata 可映射为 `Fact`，并保留 `real`/`simulated` 来源与 `trusted`/`test_only` 信任状态。普通最终答案只能使用 `trusted` facts。`verification.mode: groundguard_required` 不会在 GroundGuard 缺失或无效时静默降级；策略也可在事实不完整时警告、拒绝完成或要求修订。
+- 同步：`runtime.session()`、`session.execute()`、`govern()`、`@governed_tool`。
+- 异步：`runtime.async_session()`、`session.execute_async()`、`await runtime.async_resume()`、`govern_async()`、`@governed_async_tool`。
+
+异步自定义工具通过 `AsyncToolExecutorPort` 被直接 await。内建同步工具仍可在 async gateway 兼容路径中使用，因此策略、审批、沙箱和 evidence 语义在两种 API 中保持一致。
+
+## Facts 与最终答案
+
+工具结果可以映射为带来源和信任等级的 `Fact`。`finalize_answer()` 将最终答案与本 session 中的 facts 对照。`verification.mode: groundguard_required` 会在 GroundGuard 不可用或无效时明确拒绝降级；默认 `fallback` 模式保留内置确定性检查。
 
 ## MCP 信任面
 
-MCP server 的 consent 与 tool trust 分开保存。真实 trust 保存 command hash、工具描述 hash 与输入 schema hash；后续发现任何漂移，状态变为 `trust_stale`。静态 `discover`/`inspect` 不启动 server。
-
-## OTel 与 Security Regression Suite
-
-OpenTelemetry exporter 只从 evidence 重建 span，不引入第二套运行事实。`security-v1` 将路径、秘密、shell、审批、MCP、篡改与事实控制编为 107 个确定性检查：100 个预期拦截攻击用例和 7 个预期允许基线。报告列出每例结果与误报/漏报指标。
+MCP server 的 consent 与逐工具 trust 分开保存。真实 trust 绑定 command、描述和输入 schema fingerprint；发现漂移后状态变为 `trust_stale`，后续调用被阻断。sandbox profile 目前是策略元数据，不是操作系统级网络或进程隔离。

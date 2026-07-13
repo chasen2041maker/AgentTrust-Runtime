@@ -84,6 +84,80 @@ def test_cli_cancel_denies_pending_approval_and_prevents_execution(tmp_path: Pat
     assert verify_trace(session.run_dir / "trace.jsonl")["valid"] is True
 
 
+def test_two_pending_approvals_resume_independently_by_tool_call_id(tmp_path: Path, capsys) -> None:
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="noninteractive")
+    with runtime.session(actor_id="alice", session_id="two-pending") as session:
+        first = session.execute("write_file", {"path": "first.txt", "content": "first"})
+        second = session.execute("write_file", {"path": "second.txt", "content": "second"})
+
+    assert first.approval_request is not None
+    assert second.approval_request is not None
+    assert session.session.status == "waiting_approval"
+    assert {first.tool_call.tool_call_id, second.tool_call.tool_call_id} == {"call_001", "call_002"}
+
+    assert (
+        main(
+            [
+                "--project-root",
+                str(tmp_path),
+                "approvals",
+                "approve",
+                first.approval_request.approval_id,
+                "--reason",
+                "reviewed first",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    with runtime.resume(session.run_id, tool_call_id=first.tool_call.tool_call_id) as resumed:
+        assert resumed.pending_approval_tool_call_ids == ("call_001", "call_002")
+        with pytest.raises(RuntimeError, match="multiple pending"):
+            resumed.resume_pending_approval()
+        first_outcome = resumed.resume_pending_approval(first.tool_call.tool_call_id)
+        assert first_outcome.tool_call.status == "succeeded"
+        assert resumed.session.status == "waiting_approval"
+
+    assert (tmp_path / "first.txt").read_text(encoding="utf-8") == "first"
+    assert not (tmp_path / "second.txt").exists()
+    assert (
+        main(
+            [
+                "--project-root",
+                str(tmp_path),
+                "approvals",
+                "approve",
+                second.approval_request.approval_id,
+                "--reason",
+                "reviewed second",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        main(
+            [
+                "--project-root",
+                str(tmp_path),
+                "run",
+                "resume",
+                session.run_id,
+                "--tool-call-id",
+                second.tool_call.tool_call_id,
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out)["tool_call_id"] == "call_002"
+    assert (tmp_path / "second.txt").read_text(encoding="utf-8") == "second"
+    replayed = replay_verified_run(session.run_dir)
+    assert replayed.session.status == "completed"
+    assert [tool_call.status for tool_call in replayed.tool_calls] == ["succeeded", "succeeded"]
+
+
 def test_resume_and_approval_decision_do_not_trust_tampered_sqlite_state(tmp_path: Path, capsys) -> None:
     session, approval = _create_waiting_write_session(tmp_path, "cache-tamper.txt")
 

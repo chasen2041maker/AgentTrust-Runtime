@@ -6,9 +6,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
-from typing import Iterator, Mapping, cast
+from typing import Callable, Iterator, Mapping, cast
 
-from agenttrust.adapters.evidence.jsonl_store import read_trace, verify_trace
+from agenttrust.adapters.evidence.jsonl_store import read_verified_events
 from agenttrust.domain.lifecycle import (
     SESSION_STATUSES,
     TOOL_CALL_STATUSES,
@@ -48,62 +48,55 @@ class SQLiteStateProjection:
     def apply_event(self, event: Mapping[str, object]) -> bool:
         """Apply one hash-linked evidence event once, returning whether it changed state."""
 
-        event_type = _required_text(event, "event_type")
-        event_hash = _required_text(event, "event_hash")
-        handlers = {
-            "session_created": self._project_session_created,
-            "session_status_changed": self._project_session_status,
-            "tool_call_requested": self._project_tool_call_requested,
-            "tool_call_status_changed": self._project_tool_call_status,
-            "approval_requested": self._project_approval_requested,
-            "approval_decided": self._project_approval_decided,
-        }
-        handler = handlers.get(event_type)
-        if handler is None:
-            return False
-
         with self._connection() as connection:
-            existing = connection.execute(
-                "SELECT 1 FROM projection_events WHERE event_hash = ?", (event_hash,)
-            ).fetchone()
-            if existing is not None:
-                return False
-            handler(connection, event, event_hash)
-            connection.execute(
-                "INSERT INTO projection_events (event_hash, run_id, event_type, created_at) VALUES (?, ?, ?, ?)",
-                (
-                    event_hash,
-                    _required_text(event, "run_id"),
-                    event_type,
-                    _required_text(event, "created_at"),
-                ),
-            )
-        return True
+            return self._apply_event(connection, event)
 
     def rebuild(self) -> StateRebuildResult:
         """Recreate derived state only from verified JSONL traces."""
 
         trace_paths = sorted((self.project_root / ".agenttrust" / "runs").glob("*/trace.jsonl"))
-        for trace_path in trace_paths:
-            verification = verify_trace(trace_path)
-            if verification["valid"] is not True:
-                reason = verification.get("reason", "unknown")
-                raise ValueError(f"cannot rebuild state from invalid trace {trace_path}: {reason}")
-
-        self.reset()
+        events_by_trace = [
+            (trace_path, _read_verified_trace(trace_path))
+            for trace_path in trace_paths
+        ]
         runs_projected = 0
         events_projected = 0
-        for trace_path in trace_paths:
-            projected_for_trace = 0
-            for event in read_trace(trace_path):
-                if self.apply_event(event):
-                    projected_for_trace += 1
-            if projected_for_trace:
-                runs_projected += 1
-                events_projected += projected_for_trace
+        with self._connection() as connection:
+            connection.execute("DELETE FROM approvals")
+            connection.execute("DELETE FROM tool_calls")
+            connection.execute("DELETE FROM sessions")
+            connection.execute("DELETE FROM projection_events")
+            for _trace_path, events in events_by_trace:
+                projected_for_trace = 0
+                for event in events:
+                    if self._apply_event(connection, event):
+                        projected_for_trace += 1
+                if projected_for_trace:
+                    runs_projected += 1
+                    events_projected += projected_for_trace
         return StateRebuildResult(
             traces_scanned=len(trace_paths),
             runs_projected=runs_projected,
+            events_projected=events_projected,
+        )
+
+    def rebuild_run(self, run_dir: Path) -> StateRebuildResult:
+        """Repair one run projection from its verified trace without scanning other runs."""
+
+        events = _read_verified_trace(run_dir / "trace.jsonl")
+        run_id = run_dir.name
+        events_projected = 0
+        with self._connection() as connection:
+            connection.execute("DELETE FROM approvals WHERE run_id = ?", (run_id,))
+            connection.execute("DELETE FROM tool_calls WHERE run_id = ?", (run_id,))
+            connection.execute("DELETE FROM sessions WHERE run_id = ?", (run_id,))
+            connection.execute("DELETE FROM projection_events WHERE run_id = ?", (run_id,))
+            for event in events:
+                if self._apply_event(connection, event):
+                    events_projected += 1
+        return StateRebuildResult(
+            traces_scanned=1,
+            runs_projected=1 if events_projected else 0,
             events_projected=events_projected,
         )
 
@@ -115,6 +108,41 @@ class SQLiteStateProjection:
             connection.execute("DELETE FROM tool_calls")
             connection.execute("DELETE FROM sessions")
             connection.execute("DELETE FROM projection_events")
+
+    def _apply_event(
+        self,
+        connection: sqlite3.Connection,
+        event: Mapping[str, object],
+    ) -> bool:
+        resolved_event_type = _required_text(event, "event_type")
+        resolved_event_hash = _required_text(event, "event_hash")
+        handlers: dict[str, Callable[[sqlite3.Connection, Mapping[str, object], str], None]] = {
+            "session_created": self._project_session_created,
+            "session_status_changed": self._project_session_status,
+            "tool_call_requested": self._project_tool_call_requested,
+            "tool_call_status_changed": self._project_tool_call_status,
+            "approval_requested": self._project_approval_requested,
+            "approval_decided": self._project_approval_decided,
+        }
+        resolved_handler = handlers.get(resolved_event_type)
+        if resolved_handler is None:
+            return False
+        existing = connection.execute(
+            "SELECT 1 FROM projection_events WHERE event_hash = ?", (resolved_event_hash,)
+        ).fetchone()
+        if existing is not None:
+            return False
+        resolved_handler(connection, event, resolved_event_hash)
+        connection.execute(
+            "INSERT INTO projection_events (event_hash, run_id, event_type, created_at) VALUES (?, ?, ?, ?)",
+            (
+                resolved_event_hash,
+                _required_text(event, "run_id"),
+                resolved_event_type,
+                _required_text(event, "created_at"),
+            ),
+        )
+        return True
 
     def get_session(self, run_id: str) -> dict[str, object] | None:
         with self._connection() as connection:
@@ -145,9 +173,12 @@ class SQLiteStateProjection:
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(self.db_path, timeout=5.0)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("PRAGMA synchronous = FULL")
+        connection.execute("PRAGMA busy_timeout = 5000")
         _create_schema(connection)
         try:
             yield connection
@@ -330,6 +361,13 @@ def rebuild_state_from_traces(project_root: Path) -> StateRebuildResult:
     """Convenience entry point for rebuilding `.agenttrust/state.db`."""
 
     return SQLiteStateProjection(project_root).rebuild()
+
+
+def _read_verified_trace(trace_path: Path) -> list[dict[str, object]]:
+    try:
+        return read_verified_events(trace_path.parent)
+    except (FileNotFoundError, ValueError) as exc:
+        raise ValueError(f"cannot rebuild state from invalid trace {trace_path}: {exc}") from exc
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:

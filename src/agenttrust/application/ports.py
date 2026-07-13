@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from agenttrust.domain.decisions import PermissionDecision, SandboxDecision
 from agenttrust.domain.models import ToolIntent, ToolResult
@@ -37,6 +37,13 @@ class ToolExecutorPort(Protocol):
     """Execute a permitted tool intent."""
 
     def execute(self, intent: ToolIntent, project_root: Path) -> ToolResult: ...
+
+
+@runtime_checkable
+class AsyncToolExecutorPort(Protocol):
+    """Execute a permitted tool intent through an asynchronous transport."""
+
+    async def execute_async(self, intent: ToolIntent, project_root: Path) -> ToolResult: ...
 
 
 class RecoveryCheckpointPort(Protocol):

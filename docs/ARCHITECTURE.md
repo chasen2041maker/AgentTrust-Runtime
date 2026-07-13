@@ -55,6 +55,7 @@ benchmark/     公开的确定性安全控制回归数据集
   mcp-trust.json
   runs/{run_id}/
     trace.jsonl
+    trace-head.json
     facts.jsonl
     approvals.jsonl
     policy-snapshot.yaml
@@ -62,7 +63,8 @@ benchmark/     公开的确定性安全控制回归数据集
     backups/
 ```
 
-- `trace.jsonl` 是 append-only evidence 源。每个事件包含上一事件 hash 与自身 hash。
+- `trace.jsonl` 是 append-only evidence 源。v1 事件包含上一事件 hash、自身 hash 和可移植 envelope；已验证读取兼容 v0.5 扁平事件。
+- `trace-head.json` 保存已验证 head、文件大小和修改时间，使正常 append 无需扫描完整 trace；检查点不匹配时回退到完整验证。
 - `state.db` 是 session、tool call 和 approval 的查询投影，不是信任根。
 - `agenttrust state rebuild` 会先验证 trace，再从 JSONL 重建 SQLite。
 - policy snapshot 与 identity 被绑定到每个 evidence event；恢复不使用后来修改过的项目 policy。

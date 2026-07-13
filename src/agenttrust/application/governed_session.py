@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -52,6 +53,7 @@ class GovernedSession:
         approval_journal: ApprovalJournalPort | None = None,
         approval_ttl_seconds: int | None = None,
         initial_sequence: int = 0,
+        pending_tool_call_ids: Sequence[str] = (),
         started: bool = False,
         initial_facts: Sequence[EvidenceRecord] = (),
         final_answer_mode: str = "warn",
@@ -68,12 +70,14 @@ class GovernedSession:
         self._approval_journal = approval_journal
         self._approval_ttl_seconds = approval_ttl_seconds
         self._sequence = initial_sequence
+        self._pending_tool_call_ids = set(pending_tool_call_ids)
         self._started = started
         self._active_tool_call: SessionToolCall | None = None
         self._facts: list[EvidenceRecord] = list(initial_facts)
         self._final_answer_mode = final_answer_mode
         self._completion_blocked = False
         self._operation_lock = RLock()
+        self._async_operation_lock: asyncio.Lock | None = None
 
     @property
     def session(self) -> AgentSession:
@@ -106,6 +110,19 @@ class GovernedSession:
         with self._operation_lock:
             return self._execute(tool_name, arguments, source)
 
+    async def execute_async(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, object],
+        source: str = "python_sdk",
+    ) -> SessionToolRun:
+        """Run a governed call with a native asynchronous tool executor."""
+
+        if self._async_operation_lock is None:
+            self._async_operation_lock = asyncio.Lock()
+        async with self._async_operation_lock:
+            return await self._execute_async(tool_name, arguments, source)
+
     def _execute(
         self,
         tool_name: str,
@@ -114,7 +131,7 @@ class GovernedSession:
     ) -> SessionToolRun:
         if not self._started:
             raise RuntimeError("session must be started before executing tools")
-        if self._session.status != "running":
+        if self._session.status not in {"running", "waiting_approval"}:
             raise RuntimeError(f"cannot execute tools while session is {self._session.status}")
 
         self._sequence += 1
@@ -147,7 +164,81 @@ class GovernedSession:
                 facts_path=self._run_dir / "facts.jsonl",
                 on_tool_call_status=self._record_tool_status,
             )
-        except Exception:
+        except BaseException:
+            if not self._session.is_terminal:
+                self._transition_session("failed")
+            raise
+        finally:
+            completed_tool_call = self._active_tool_call
+            self._active_tool_call = None
+
+        if completed_tool_call is None:
+            raise RuntimeError("tool call lifecycle did not complete")
+        self._facts.extend(outcome.facts)
+        approval_request = None
+        if outcome.final_permission.final_effect == "ask":
+            approval_request = ApprovalRequest.create(
+                run_id=self._session.run_id,
+                tool_call_id=completed_tool_call.tool_call_id,
+                tool_name=completed_tool_call.tool_name,
+                arguments_digest=completed_tool_call.arguments_digest,
+                policy_rule_id=outcome.permission_decision.rule_id,
+                reason=outcome.permission_decision.reason,
+                arguments_preview=reviewable_arguments(arguments),
+                ttl_seconds=self._approval_ttl_seconds,
+            )
+            approval_event = self._evidence.append("approval_requested", **approval_request.to_dict())
+            if self._approval_journal is not None:
+                self._approval_journal.append(approval_event)
+        return SessionToolRun(
+            session=self._session,
+            tool_call=completed_tool_call,
+            outcome=outcome,
+            approval_request=approval_request,
+        )
+
+    async def _execute_async(
+        self,
+        tool_name: str,
+        arguments: Mapping[str, object],
+        source: str = "python_sdk",
+    ) -> SessionToolRun:
+        if not self._started:
+            raise RuntimeError("session must be started before executing tools")
+        if self._session.status not in {"running", "waiting_approval"}:
+            raise RuntimeError(f"cannot execute tools while session is {self._session.status}")
+
+        self._sequence += 1
+        tool_call = SessionToolCall.create(
+            run_id=self._session.run_id,
+            session_id=self._session.session_id,
+            sequence=self._sequence,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+        self._active_tool_call = tool_call
+        self._evidence.append("tool_call_requested", **tool_call.to_dict())
+        intent = ToolIntent(
+            run_id=self._session.run_id,
+            tool_call_id=tool_call.tool_call_id,
+            tool_name=tool_name,
+            arguments=dict(arguments),
+            source=source,
+            runtime_mode=self._runtime_mode,
+            simulation_allowed=self._simulation_allowed,
+        )
+        try:
+            outcome = await self._tool_runner.execute_async(
+                intent,
+                project_root=self._project_root,
+                run_dir=self._run_dir,
+                runtime_mode=self._runtime_mode,
+                approval_mode=self._approval_mode,
+                hooks=self._hooks,
+                facts_path=self._run_dir / "facts.jsonl",
+                on_tool_call_status=self._record_tool_status,
+            )
+        except BaseException:
             if not self._session.is_terminal:
                 self._transition_session("failed")
             raise
@@ -224,6 +315,20 @@ class GovernedSession:
         with self._operation_lock:
             return self._resume_tool_call(tool_call, arguments, approval_response, source)
 
+    async def resume_tool_call_async(
+        self,
+        tool_call: SessionToolCall,
+        arguments: Mapping[str, object],
+        approval_response: str,
+        source: str = "approval_resume",
+    ) -> SessionToolRun:
+        """Resume one approved call using the asynchronous tool executor."""
+
+        if self._async_operation_lock is None:
+            self._async_operation_lock = asyncio.Lock()
+        async with self._async_operation_lock:
+            return await self._resume_tool_call_async(tool_call, arguments, approval_response, source)
+
     def _resume_tool_call(
         self,
         tool_call: SessionToolCall,
@@ -264,7 +369,60 @@ class GovernedSession:
                 on_tool_call_status=self._record_tool_status,
                 approval_response=approval_response,
             )
-        except Exception:
+        except BaseException:
+            if not self._session.is_terminal:
+                self._transition_session("failed")
+            raise
+        finally:
+            completed_tool_call = self._active_tool_call
+            self._active_tool_call = None
+
+        if completed_tool_call is None:
+            raise RuntimeError("resumed tool call lifecycle did not complete")
+        self._facts.extend(outcome.facts)
+        return SessionToolRun(session=self._session, tool_call=completed_tool_call, outcome=outcome)
+
+    async def _resume_tool_call_async(
+        self,
+        tool_call: SessionToolCall,
+        arguments: Mapping[str, object],
+        approval_response: str,
+        source: str = "approval_resume",
+    ) -> SessionToolRun:
+        if not self._started:
+            raise RuntimeError("session has not been restored")
+        if self._session.status != "waiting_approval":
+            raise RuntimeError(f"cannot resume a tool while session is {self._session.status}")
+        if tool_call.status != "waiting_approval":
+            raise RuntimeError(f"cannot resume tool call while it is {tool_call.status}")
+        if approval_response not in {"approve", "deny"}:
+            raise ValueError(f"invalid persisted approval response: {approval_response}")
+        if arguments_digest(arguments) != tool_call.arguments_digest:
+            raise ValueError("persisted tool arguments do not match the approval-bound digest")
+
+        self._active_tool_call = tool_call
+        intent = ToolIntent(
+            run_id=self._session.run_id,
+            tool_call_id=tool_call.tool_call_id,
+            tool_name=tool_call.tool_name,
+            arguments=dict(arguments),
+            source=source,
+            runtime_mode=self._runtime_mode,
+            simulation_allowed=self._simulation_allowed,
+        )
+        try:
+            outcome = await self._tool_runner.execute_async(
+                intent,
+                project_root=self._project_root,
+                run_dir=self._run_dir,
+                runtime_mode=self._runtime_mode,
+                approval_mode=self._approval_mode,
+                hooks=self._hooks,
+                facts_path=self._run_dir / "facts.jsonl",
+                on_tool_call_status=self._record_tool_status,
+                approval_response=approval_response,
+            )
+        except BaseException:
             if not self._session.is_terminal:
                 self._transition_session("failed")
             raise
@@ -291,12 +449,21 @@ class GovernedSession:
     def _record_tool_status(self, status: ToolCallStatus) -> None:
         if self._active_tool_call is None:
             raise RuntimeError("tool call lifecycle event has no active tool call")
-        if status == "waiting_approval":
-            self._transition_session("waiting_approval")
-        elif self._session.status == "waiting_approval":
-            self._transition_session("running")
         self._active_tool_call = self._active_tool_call.transition(status)
         self._evidence.append("tool_call_status_changed", **self._active_tool_call.to_dict())
+        if status == "waiting_approval":
+            self._pending_tool_call_ids.add(self._active_tool_call.tool_call_id)
+        else:
+            self._pending_tool_call_ids.discard(self._active_tool_call.tool_call_id)
+        self._reconcile_approval_waiting_status()
+
+    def _reconcile_approval_waiting_status(self) -> None:
+        if self._session.is_terminal:
+            return
+        if self._pending_tool_call_ids and self._session.status == "running":
+            self._transition_session("waiting_approval")
+        elif not self._pending_tool_call_ids and self._session.status == "waiting_approval":
+            self._transition_session("running")
 
     def _transition_session(self, status: SessionStatus) -> None:
         self._session = self._session.transition(status)

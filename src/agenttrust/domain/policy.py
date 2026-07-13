@@ -8,6 +8,7 @@ import shlex
 from typing import Any
 
 from agenttrust.domain.models import ToolIntent
+from agenttrust.domain.protocol import POLICY_PROTOCOL_VERSION
 
 
 VALID_EFFECTS = frozenset({"allow", "ask", "deny"})
@@ -156,9 +157,13 @@ class Policy:
     final_answer_mode: str = "warn"
     verification_mode: str = "fallback"
     approval_ttl_seconds: int = 3600
+    protocol_version: str = POLICY_PROTOCOL_VERSION
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Policy":
+        protocol_version = str(raw.get("policy_version", POLICY_PROTOCOL_VERSION))
+        if protocol_version != POLICY_PROTOCOL_VERSION:
+            raise ValueError(f"unsupported policy protocol version: {protocol_version}")
         final_answer = raw.get("final_answer", {}) or {}
         if not isinstance(final_answer, dict):
             raise ValueError("final_answer policy must contain a mapping")
@@ -183,6 +188,7 @@ class Policy:
             raise ValueError("approvals.default_ttl_seconds must be a positive integer")
         return cls(
             project_root=str(raw.get("project_root", ".")),
+            protocol_version=protocol_version,
             mode=str(raw.get("mode", "default")),
             rules=tuple(PolicyRule.from_dict(rule) for rule in raw.get("rules", ()) or ()),
             hooks=tuple(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from functools import wraps
 from hashlib import sha256
 from inspect import isawaitable
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from agenttrust.domain.models import ToolIntent, ToolResult
-from agenttrust.interfaces.python_api import AgentTrustRuntime, AgentTrustSession
+from agenttrust.interfaces.python_api import AgentTrustAsyncSession, AgentTrustRuntime, AgentTrustSession
 from agenttrust.tools.registry import ToolSpec
 
 
@@ -141,6 +141,114 @@ def governed_tool(
 
     def decorate(tool: Callable[..., T]) -> Callable[..., T]:
         return govern(
+            tool,
+            runtime=runtime,
+            session=session,
+            tool_name=name,
+            default_effect=default_effect,
+        )
+
+    return decorate
+
+
+def govern_async(
+    tool: Callable[..., Awaitable[T]],
+    *,
+    runtime: AgentTrustRuntime | None = None,
+    session: AgentTrustAsyncSession | None = None,
+    tool_name: str | None = None,
+    default_effect: str = "ask",
+) -> Callable[..., Awaitable[T]]:
+    """Wrap an async Python tool with the native async governance pipeline."""
+
+    if (runtime is None) == (session is None):
+        raise ValueError("provide exactly one of runtime or session")
+    if default_effect not in {"allow", "ask", "deny"}:
+        raise ValueError(f"invalid governed tool default effect: {default_effect}")
+    resolved_name = tool_name or tool.__name__
+    if not resolved_name:
+        raise ValueError("governed tool requires a non-empty name")
+    results: dict[str, object] = {}
+    spec = ToolSpec(
+        name=resolved_name,
+        category="custom",
+        input_schema={"args": "array", "kwargs": "object"},
+        default_effect=default_effect,
+        source="govern_async",
+    )
+
+    async def handler(intent: ToolIntent, _project_root: Path) -> ToolResult:
+        try:
+            args, kwargs = _decode_arguments(intent.arguments)
+            value = await tool(*args, **kwargs)
+            results[intent.tool_call_id] = value
+            preview = repr(value)
+            return ToolResult(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                status="ok",
+                output_preview=preview[:500],
+                output_digest="sha256:" + sha256(preview.encode("utf-8")).hexdigest(),
+                metadata={"governed_callable": True, "async": True, "output_type": type(value).__name__},
+            )
+        except Exception as exc:
+            return ToolResult(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                status="error",
+                error=f"governed async callable failed: {exc}",
+                metadata={"governed_callable": True, "async": True},
+            )
+
+    def register(target_session: AgentTrustAsyncSession) -> AgentTrustAsyncSession:
+        target_session.register_async_tool(spec, handler)
+        return target_session
+
+    async def invoke(
+        target_session: AgentTrustAsyncSession,
+        args: tuple[object, ...],
+        kwargs: dict[str, object],
+    ) -> T:
+        register(target_session)
+        payload: dict[str, object] = {"args": list(args), "kwargs": kwargs}
+        _assert_json_serializable(payload)
+        run = await target_session.execute_async(resolved_name, payload, source="govern_async")
+        if run.approval_request is not None:
+            raise ApprovalPending(target_session, run.approval_request.approval_id)
+        if run.outcome.result is None:
+            raise GovernedToolDenied(run.outcome.final_permission.reason)
+        if run.outcome.result.status != "ok":
+            raise GovernedToolExecutionError(run.outcome.result.error or "governed async tool execution failed")
+        value = results.pop(run.tool_call.tool_call_id, _MISSING)
+        if value is _MISSING:
+            raise GovernedToolExecutionError("governed async tool returned no Python value")
+        return value  # type: ignore[return-value]
+
+    @wraps(tool)
+    async def wrapped(*args: object, **kwargs: object) -> T:
+        if session is not None:
+            return await invoke(session, args, kwargs)
+        assert runtime is not None
+        async with runtime.async_session() as new_session:
+            return await invoke(new_session, args, kwargs)
+
+    setattr(wrapped, "register", register)
+    return wrapped
+
+
+def governed_async_tool(
+    *,
+    runtime: AgentTrustRuntime | None = None,
+    session: AgentTrustAsyncSession | None = None,
+    name: str | None = None,
+    default_effect: str = "ask",
+) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
+    """Decorate an async Python tool with the same behavior as govern_async()."""
+
+    def decorate(tool: Callable[..., Awaitable[T]]) -> Callable[..., Awaitable[T]]:
+        return govern_async(
             tool,
             runtime=runtime,
             session=session,

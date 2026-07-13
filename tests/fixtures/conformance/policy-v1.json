@@ -1,0 +1,17 @@
+{
+  "policy_version": "agenttrust.policy/v1",
+  "project_root": ".",
+  "mode": "default",
+  "approvals": {
+    "default_ttl_seconds": 3600
+  },
+  "rules": [
+    {
+      "id": "ask-before-write",
+      "tool": "write_file",
+      "effect": "ask",
+      "reason": "review code changes",
+      "paths": ["src/**"]
+    }
+  ]
+}

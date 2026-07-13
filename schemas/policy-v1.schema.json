@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenttrust.dev/schemas/policy-v1.schema.json",
+  "title": "AgentTrust Policy v1",
+  "type": "object",
+  "required": ["policy_version", "rules"],
+  "properties": {
+    "policy_version": {"const": "agenttrust.policy/v1"},
+    "project_root": {"type": "string"},
+    "mode": {"type": "string"},
+    "rules": {"type": "array", "items": {"$ref": "#/$defs/rule"}},
+    "approvals": {"type": "object", "properties": {"default_ttl_seconds": {"type": "integer", "minimum": 1}}}
+  },
+  "$defs": {
+    "rule": {"type": "object", "required": ["id", "tool", "effect", "reason"], "properties": {"id": {"type": "string", "minLength": 1}, "tool": {"type": "string", "minLength": 1}, "effect": {"enum": ["allow", "ask", "deny"]}, "reason": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}}, "argv_patterns": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}}}
+  }
+}

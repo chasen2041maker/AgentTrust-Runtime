@@ -41,6 +41,10 @@ from agenttrust.adapters.evidence.sqlite_state import rebuild_state_from_traces
 from agenttrust.skills_lite import ensure_demo_skill, list_skills, load_skill
 from agenttrust.tools.registry import get_tool_spec, list_tool_specs
 from agenttrust.domain.approvals import ApprovalRequest
+from agenttrust.domain.models import ToolIntent
+from agenttrust.domain.protocol import DecisionRequest
+from agenttrust.permissions.diagnostics import lint_policy, run_policy_fixtures
+from agenttrust.permissions.engine import PermissionEngine
 
 
 def _project_root(path: str | None) -> Path:
@@ -72,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("task", nargs="?", default="")
     run_parser.add_argument("run_id", nargs="?")
     run_parser.add_argument("--skill")
+    run_parser.add_argument("--tool-call-id")
 
     run_fixture_parser = subparsers.add_parser("run-fixture", help="Run a deterministic fixture.")
     run_fixture_parser.add_argument("name", help="Fixture name.")
@@ -125,6 +130,20 @@ def build_parser() -> argparse.ArgumentParser:
     policy_subparsers = policy_parser.add_subparsers(dest="policy_command", required=True)
     validate_parser = policy_subparsers.add_parser("validate", help="Validate that a policy file exists.")
     validate_parser.add_argument("path")
+    lint_parser = policy_subparsers.add_parser("lint", help="Report static policy conflicts and quality issues.")
+    lint_parser.add_argument("path")
+    test_parser = policy_subparsers.add_parser("test", help="Run JSON policy conformance fixtures.")
+    test_parser.add_argument("path")
+    test_parser.add_argument("fixtures")
+    explain_parser = policy_subparsers.add_parser("explain", help="Explain policy precedence for one tool request.")
+    explain_parser.add_argument("path")
+    explain_parser.add_argument("--tool", required=True)
+    explain_parser.add_argument("--path", dest="resource_path")
+    explain_parser.add_argument("--command", dest="shell_command")
+    explain_parser.add_argument("--argv-json")
+    explain_parser.add_argument("--server")
+    explain_parser.add_argument("--remote-tool")
+    explain_parser.add_argument("--runtime-mode", default="interactive")
 
     tools_parser = subparsers.add_parser("tools", help="Tool registry helpers.")
     tools_subparsers = tools_parser.add_subparsers(dest="tools_command", required=True)
@@ -208,8 +227,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 runtime = AgentTrustRuntime(project_root)
                 if args.task == "resume":
-                    with runtime.resume(args.run_id) as resumed_session:
-                        outcome = resumed_session.resume_pending_approval()
+                    with runtime.resume(args.run_id, tool_call_id=args.tool_call_id) as resumed_session:
+                        outcome = resumed_session.resume_pending_approval(args.tool_call_id)
                     print(
                         json.dumps(
                             {
@@ -385,6 +404,50 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(f"valid policy file: {policy_path}")
         return 0
+
+    if args.command == "policy" and args.policy_command in {"lint", "test", "explain"}:
+        policy_path = (project_root / args.path).resolve()
+        try:
+            policy = load_policy(policy_path)
+            if args.policy_command == "lint":
+                diagnostics = lint_policy(policy)
+                print(json.dumps({"policy": str(policy_path), "diagnostics": diagnostics}, ensure_ascii=False, indent=2))
+                return 2 if any(item["level"] == "error" for item in diagnostics) else 0
+            if args.policy_command == "test":
+                fixture_path = (project_root / args.fixtures).resolve()
+                fixtures = json.loads(fixture_path.read_text(encoding="utf-8"))
+                results = run_policy_fixtures(policy, fixtures)
+                print(json.dumps({"results": results}, ensure_ascii=False, indent=2))
+                return 0 if all(item["passed"] for item in results) else 2
+            policy_arguments: dict[str, object] = {}
+            for argument_name, attribute_name in (
+                ("path", "resource_path"),
+                ("command", "shell_command"),
+                ("server", "server"),
+            ):
+                value = getattr(args, attribute_name)
+                if value is not None:
+                    policy_arguments[argument_name] = value
+            if args.remote_tool is not None:
+                policy_arguments["tool"] = args.remote_tool
+            if args.argv_json is not None:
+                argv = json.loads(args.argv_json)
+                if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+                    raise ValueError("--argv-json must be a JSON list of strings")
+                policy_arguments["argv"] = argv
+            intent = ToolIntent(
+                run_id="policy-explain",
+                tool_call_id="policy-explain",
+                tool_name=args.tool,
+                arguments=policy_arguments,
+                source="policy_explain",
+                runtime_mode=args.runtime_mode,
+            )
+            print(json.dumps(PermissionEngine(policy).explain(DecisionRequest.from_intent(intent)), ensure_ascii=False, indent=2))
+            return 0
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            print(f"policy {args.policy_command} failed: {exc}", file=sys.stderr)
+            return 2
 
     if args.command == "tools":
         if args.tools_command == "list":
@@ -594,7 +657,7 @@ def _decide_approval_locked(
         decided = approval.deny(approver_id, reason)
     else:
         raise ValueError(f"unknown approval decision: {decision}")
-    state.rebuild()
+    state.rebuild_run(run_dir)
     evidence = ProjectingTraceRecorder(recorder, state)
     if expired:
         evidence.append(

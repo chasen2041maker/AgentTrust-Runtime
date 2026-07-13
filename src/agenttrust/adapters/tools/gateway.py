@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from agenttrust.domain.models import ToolIntent, ToolResult
@@ -14,6 +15,7 @@ from agenttrust.adapters.tools.skill import skill_context
 
 
 ToolHandler = Callable[[ToolIntent, Path], ToolResult]
+AsyncToolHandler = Callable[[ToolIntent, Path], Awaitable[ToolResult]]
 
 
 class ToolGateway:
@@ -29,6 +31,7 @@ class ToolGateway:
             "mcp_tool": mcp_tool,
             "skill_context": skill_context,
         }
+        self._async_tools: dict[str, AsyncToolHandler] = {}
 
     @property
     def tool_names(self) -> tuple[str, ...]:
@@ -39,6 +42,12 @@ class ToolGateway:
         if existing is not None and existing is not handler:
             raise ValueError(f"tool handler is already registered for {name}")
         self._tools[name] = handler
+
+    def register_async(self, name: str, handler: AsyncToolHandler) -> None:
+        existing = self._async_tools.get(name)
+        if existing is not None and existing is not handler:
+            raise ValueError(f"async tool handler is already registered for {name}")
+        self._async_tools[name] = handler
 
     def execute(self, intent: ToolIntent, project_root: Path) -> ToolResult:
         handler = self._tools.get(intent.tool_name)
@@ -52,3 +61,21 @@ class ToolGateway:
                 metadata={"available_tools": list(self.tool_names)},
             )
         return handler(intent, project_root)
+
+    async def execute_async(self, intent: ToolIntent, project_root: Path) -> ToolResult:
+        """Use native async handlers directly; preserve built-ins through an explicit bridge."""
+
+        async_handler = self._async_tools.get(intent.tool_name)
+        if async_handler is not None:
+            return await async_handler(intent, project_root)
+        handler = self._tools.get(intent.tool_name)
+        if handler is None:
+            return ToolResult(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                status="error",
+                error=f"unknown tool: {intent.tool_name}",
+                metadata={"available_tools": list(self.tool_names)},
+            )
+        return await asyncio.to_thread(handler, intent, project_root)

@@ -1,0 +1,11 @@
+{
+  "schema_version": "agenttrust.tool-spec/v1",
+  "name": "read_file",
+  "category": "file",
+  "input_schema": {
+    "path": "string"
+  },
+  "default_effect": "allow",
+  "enabled": true,
+  "source": "builtin"
+}

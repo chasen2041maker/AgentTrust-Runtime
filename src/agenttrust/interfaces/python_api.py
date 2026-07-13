@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
-from typing import Sequence
+from typing import Mapping, Sequence
 from uuid import uuid4
 
 from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
@@ -18,7 +19,7 @@ from agenttrust.adapters.evidence.run_lock import RunLock
 from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
 from agenttrust.adapters.policy.yaml_policy import load_policy, policy_digest, snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
-from agenttrust.adapters.tools.gateway import ToolGateway, ToolHandler
+from agenttrust.adapters.tools.gateway import AsyncToolHandler, ToolGateway, ToolHandler
 from agenttrust.adapters.verification.mapper import Fact, map_tool_result, write_facts
 from agenttrust.application.governed_session import GovernedSession, SessionToolRun
 from agenttrust.application.ports import EvidenceRecorderPort
@@ -72,6 +73,9 @@ class AgentTrustSession:
         pending_tool_call: SessionToolCall | None = None,
         pending_approval: ApprovalRequest | None = None,
         pending_arguments: dict[str, object] | None = None,
+        pending_tool_calls: Mapping[str, SessionToolCall] | None = None,
+        pending_approvals: Mapping[str, ApprovalRequest] | None = None,
+        pending_arguments_by_call: Mapping[str, Mapping[str, object]] | None = None,
         timeout_seconds: float | None = None,
         permission_engine: PermissionEngine | None = None,
         tool_gateway: ToolGateway | None = None,
@@ -85,6 +89,16 @@ class AgentTrustSession:
         self._pending_tool_call = pending_tool_call
         self._pending_approval = pending_approval
         self._pending_arguments = pending_arguments
+        self._pending_tool_calls = dict(pending_tool_calls or {})
+        self._pending_approvals = dict(pending_approvals or {})
+        self._pending_arguments_by_call = {
+            tool_call_id: dict(arguments)
+            for tool_call_id, arguments in (pending_arguments_by_call or {}).items()
+        }
+        if pending_tool_call is not None and pending_approval is not None and pending_arguments is not None:
+            self._pending_tool_calls.setdefault(pending_tool_call.tool_call_id, pending_tool_call)
+            self._pending_approvals.setdefault(pending_tool_call.tool_call_id, pending_approval)
+            self._pending_arguments_by_call.setdefault(pending_tool_call.tool_call_id, dict(pending_arguments))
         self._deadline = monotonic() + timeout_seconds if timeout_seconds is not None else None
         self._permission_engine = permission_engine
         self._tool_gateway = tool_gateway
@@ -153,18 +167,36 @@ class AgentTrustSession:
         self._raise_if_timed_out()
         return self._governed_session.execute(tool_name, arguments, source)
 
-    def resume_pending_approval(self) -> SessionToolRun:
+    @property
+    def pending_approval_tool_call_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self._pending_tool_calls))
+
+    def resume_pending_approval(self, tool_call_id: str | None = None) -> SessionToolRun:
         if not self._entered:
             raise RuntimeError("session tools must execute inside the context manager")
         self._raise_if_timed_out()
-        if self._pending_tool_call is None or self._pending_approval is None or self._pending_arguments is None:
-            raise RuntimeError("session has no approved or denied pending tool call to resume")
-        response = "approve" if self._pending_approval.decision == "approved" else "deny"
+        if tool_call_id is None:
+            if len(self._pending_tool_calls) != 1:
+                raise RuntimeError("session has multiple pending tool calls; specify tool_call_id")
+            tool_call_id = next(iter(self._pending_tool_calls))
+        tool_call = self._pending_tool_calls.get(tool_call_id)
+        approval = self._pending_approvals.get(tool_call_id)
+        arguments = self._pending_arguments_by_call.get(tool_call_id)
+        if tool_call is None or approval is None or arguments is None:
+            raise RuntimeError(f"session has no pending tool call to resume: {tool_call_id}")
+        if approval.is_expired():
+            raise RuntimeError(f"approval {approval.approval_id} has expired")
+        if approval.is_pending:
+            raise RuntimeError(f"approval {approval.approval_id} is still pending")
+        response = "approve" if approval.decision == "approved" else "deny"
         result = self._governed_session.resume_tool_call(
-            self._pending_tool_call,
-            self._pending_arguments,
+            tool_call,
+            arguments,
             response,
         )
+        self._pending_tool_calls.pop(tool_call_id, None)
+        self._pending_approvals.pop(tool_call_id, None)
+        self._pending_arguments_by_call.pop(tool_call_id, None)
         self._pending_tool_call = None
         self._pending_approval = None
         self._pending_arguments = None
@@ -204,6 +236,75 @@ class AgentTrustSession:
         if self._has_timed_out():
             self._governed_session.timeout()
             raise TimeoutError("governed session timed out")
+
+
+class AgentTrustAsyncSession(AgentTrustSession):
+    """Async context-managed session backed by the same policy and evidence semantics."""
+
+    def __enter__(self) -> "AgentTrustAsyncSession":
+        raise RuntimeError("use 'async with' for an async AgentTrust session")
+
+    def __exit__(self, exception_type, exception, traceback) -> None:
+        raise RuntimeError("use 'async with' for an async AgentTrust session")
+
+    async def __aenter__(self) -> "AgentTrustAsyncSession":
+        AgentTrustSession.__enter__(self)
+        return self
+
+    async def __aexit__(self, exception_type, exception, traceback) -> None:
+        AgentTrustSession.__exit__(self, exception_type, exception, traceback)
+
+    def execute(
+        self,
+        tool_name: str,
+        arguments: dict[str, object],
+        source: str = "python_sdk",
+    ) -> SessionToolRun:
+        raise RuntimeError("use execute_async() with an async AgentTrust session")
+
+    def resume_pending_approval(self, tool_call_id: str | None = None) -> SessionToolRun:
+        raise RuntimeError("use resume_pending_approval_async() with an async AgentTrust session")
+
+    async def execute_async(
+        self,
+        tool_name: str,
+        arguments: dict[str, object],
+        source: str = "python_sdk",
+    ) -> SessionToolRun:
+        if not self._entered:
+            raise RuntimeError("session tools must execute inside the async context manager")
+        self._raise_if_timed_out()
+        return await self._governed_session.execute_async(tool_name, arguments, source)
+
+    async def resume_pending_approval_async(self, tool_call_id: str | None = None) -> SessionToolRun:
+        if not self._entered:
+            raise RuntimeError("session tools must execute inside the async context manager")
+        self._raise_if_timed_out()
+        if tool_call_id is None:
+            if len(self._pending_tool_calls) != 1:
+                raise RuntimeError("session has multiple pending tool calls; specify tool_call_id")
+            tool_call_id = next(iter(self._pending_tool_calls))
+        tool_call = self._pending_tool_calls.get(tool_call_id)
+        approval = self._pending_approvals.get(tool_call_id)
+        arguments = self._pending_arguments_by_call.get(tool_call_id)
+        if tool_call is None or approval is None or arguments is None:
+            raise RuntimeError(f"session has no pending tool call to resume: {tool_call_id}")
+        if approval.is_expired():
+            raise RuntimeError(f"approval {approval.approval_id} has expired")
+        if approval.is_pending:
+            raise RuntimeError(f"approval {approval.approval_id} is still pending")
+        response = "approve" if approval.decision == "approved" else "deny"
+        result = await self._governed_session.resume_tool_call_async(tool_call, arguments, response)
+        self._pending_tool_calls.pop(tool_call_id, None)
+        self._pending_approvals.pop(tool_call_id, None)
+        self._pending_arguments_by_call.pop(tool_call_id, None)
+        return result
+
+    def register_async_tool(self, spec: ToolSpec, handler: AsyncToolHandler) -> None:
+        if self._permission_engine is None or self._tool_gateway is None:
+            raise RuntimeError("session does not support dynamic tool registration")
+        self._tool_gateway.register_async(spec.name, handler)
+        self._permission_engine.register_tool_spec(spec)
 
 
 class AgentTrustRuntime:
@@ -255,7 +356,6 @@ class AgentTrustRuntime:
             policy_version=policy_version,
         )
         projection = SQLiteStateProjection(self.project_root)
-        projection.rebuild()
         evidence = ProjectingTraceRecorder(recorder, projection)
         tool_runner, permission_engine, tool_gateway = self._build_tool_runner(policy, evidence)
         resolved_approval_mode = approval_mode_for_runtime(self.runtime_mode, approval_mode or self.approval_mode)
@@ -292,10 +392,99 @@ class AgentTrustRuntime:
             verification_mode=policy.verification_mode,
         )
 
+    def async_session(
+        self,
+        *,
+        actor_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        timeout_seconds: float | None = None,
+        approval_ttl_seconds: int | None = None,
+        approval_mode: str | None = None,
+    ) -> AgentTrustAsyncSession:
+        """Create an async session with the same policy, approval, and evidence setup as session()."""
+
+        prepared = self.session(
+            actor_id=actor_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            timeout_seconds=timeout_seconds,
+            approval_ttl_seconds=approval_ttl_seconds,
+            approval_mode=approval_mode,
+        )
+        return self._as_async_session(prepared, timeout_seconds)
+
+    @staticmethod
+    def _as_async_session(
+        prepared: AgentTrustSession, timeout_seconds: float | None
+    ) -> AgentTrustAsyncSession:
+        """Expose a prepared session through async-only mutation entry points."""
+
+        return AgentTrustAsyncSession(
+            prepared._governed_session,
+            prepared._evidence,
+            prepared._runtime_mode,
+            restored=prepared._restored,
+            pending_tool_call=prepared._pending_tool_call,
+            pending_approval=prepared._pending_approval,
+            pending_arguments=prepared._pending_arguments,
+            pending_tool_calls=prepared._pending_tool_calls,
+            pending_approvals=prepared._pending_approvals,
+            pending_arguments_by_call=prepared._pending_arguments_by_call,
+            timeout_seconds=timeout_seconds,
+            permission_engine=prepared._permission_engine,
+            tool_gateway=prepared._tool_gateway,
+            run_lock=prepared._run_lock,
+            verification_mode=prepared._verification_mode,
+        )
+
+    async def async_resume(
+        self,
+        run_id: str,
+        timeout_seconds: float | None = None,
+        tool_call_id: str | None = None,
+        resume_tools: Sequence[object] = (),
+    ) -> AgentTrustAsyncSession:
+        """Asynchronously prepare one decided approval for native async execution."""
+
+        self._validate_resume_tools(resume_tools)
+        if timeout_seconds is not None and timeout_seconds < 0:
+            raise ValueError("timeout_seconds must be zero or greater")
+        run_dir = resolve_run_dir(self.project_root, run_id)
+        operation_lock = RunLock(run_dir)
+        acquire_task = asyncio.create_task(asyncio.to_thread(operation_lock.acquire))
+        try:
+            await asyncio.shield(acquire_task)
+        except asyncio.CancelledError:
+            await acquire_task
+            await asyncio.to_thread(operation_lock.release)
+            raise
+
+        prepare_task = asyncio.create_task(
+            asyncio.to_thread(self._resume_locked, run_id, timeout_seconds, tool_call_id, (), operation_lock)
+        )
+        try:
+            prepared = await asyncio.shield(prepare_task)
+            restored = self._as_async_session(prepared, timeout_seconds)
+            for resume_tool in resume_tools:
+                register = getattr(resume_tool, "register")
+                register(restored)
+            return restored
+        except asyncio.CancelledError:
+            try:
+                await prepare_task
+            finally:
+                await asyncio.to_thread(operation_lock.release)
+            raise
+        except BaseException:
+            await asyncio.to_thread(operation_lock.release)
+            raise
+
     def resume(
         self,
         run_id: str,
         timeout_seconds: float | None = None,
+        tool_call_id: str | None = None,
         resume_tools: Sequence[object] = (),
     ) -> AgentTrustSession:
         """Resume a decided request while holding its run lock until the context exits."""
@@ -306,7 +495,7 @@ class AgentTrustRuntime:
         operation_lock = RunLock(run_dir)
         operation_lock.acquire()
         try:
-            return self._resume_locked(run_id, timeout_seconds, resume_tools, operation_lock)
+            return self._resume_locked(run_id, timeout_seconds, tool_call_id, resume_tools, operation_lock)
         except Exception:
             operation_lock.release()
             raise
@@ -315,6 +504,7 @@ class AgentTrustRuntime:
         self,
         run_id: str,
         timeout_seconds: float | None,
+        tool_call_id: str | None,
         resume_tools: Sequence[object],
         operation_lock: RunLock,
     ) -> AgentTrustSession:
@@ -326,13 +516,36 @@ class AgentTrustRuntime:
         if session.status != "waiting_approval":
             raise ValueError(f"session {run_id} is not waiting for approval")
         waiting_calls = [call for call in replayed.tool_calls if call.status == "waiting_approval"]
-        if len(waiting_calls) != 1:
-            raise ValueError(f"session {run_id} must have exactly one waiting tool call to resume")
-        tool_call = waiting_calls[0]
-        approvals = [approval for approval in replayed.approvals if approval.tool_call_id == tool_call.tool_call_id]
-        if len(approvals) != 1:
-            raise ValueError(f"tool call {tool_call.tool_call_id} must have exactly one approval request")
-        approval = approvals[0]
+        if not waiting_calls:
+            raise ValueError(f"session {run_id} has no waiting tool calls to resume")
+        waiting_by_id = {call.tool_call_id: call for call in waiting_calls}
+        approvals_by_call: dict[str, ApprovalRequest] = {}
+        for candidate_approval in replayed.approvals:
+            if candidate_approval.tool_call_id not in waiting_by_id:
+                continue
+            if candidate_approval.tool_call_id in approvals_by_call:
+                raise ValueError(f"tool call {candidate_approval.tool_call_id} has multiple approval requests")
+            approvals_by_call[candidate_approval.tool_call_id] = candidate_approval
+        if set(waiting_by_id) != set(approvals_by_call):
+            missing = sorted(set(waiting_by_id) - set(approvals_by_call))
+            raise ValueError(f"waiting tool calls have no approval request: {', '.join(missing)}")
+        if tool_call_id is None:
+            if len(waiting_by_id) == 1:
+                tool_call_id = next(iter(waiting_by_id))
+            else:
+                resumable_ids = sorted(
+                    call_id
+                    for call_id, candidate_approval in approvals_by_call.items()
+                    if not candidate_approval.is_pending and not candidate_approval.is_expired()
+                )
+                if len(resumable_ids) == 1:
+                    tool_call_id = resumable_ids[0]
+                else:
+                    raise ValueError(f"session {run_id} has multiple pending tool calls; specify tool_call_id")
+        tool_call = waiting_by_id.get(tool_call_id)
+        approval = approvals_by_call.get(tool_call_id)
+        if tool_call is None or approval is None:
+            raise ValueError(f"session {run_id} has no waiting tool call: {tool_call_id}")
         if approval.is_expired():
             raise ValueError(f"approval {approval.approval_id} has expired")
         if approval.is_pending:
@@ -343,9 +556,7 @@ class AgentTrustRuntime:
         if session.policy_version != policy_digest(policy_path.read_bytes()):
             raise ValueError(f"policy snapshot digest does not match verified session evidence for {run_id}")
         policy = load_policy(policy_path)
-        for resume_tool in resume_tools:
-            if not callable(getattr(resume_tool, "register", None)):
-                raise ValueError("resume tools must provide a callable register(session) attribute")
+        self._validate_resume_tools(resume_tools)
         recorder = TraceRecorder(run_dir, run_lock=operation_lock)
         recorder.bind(
             actor_id=session.actor_id,
@@ -354,7 +565,7 @@ class AgentTrustRuntime:
             policy_version=session.policy_version,
         )
         projection = SQLiteStateProjection(self.project_root)
-        projection.rebuild()
+        projection.rebuild_run(run_dir)
         evidence = ProjectingTraceRecorder(recorder, projection)
         evidence.append(
             "run_resumed",
@@ -377,6 +588,7 @@ class AgentTrustRuntime:
             approval_journal=JsonlApprovalJournal(run_dir),
             approval_ttl_seconds=policy.approval_ttl_seconds,
             initial_sequence=max((call.sequence for call in replayed.tool_calls), default=0),
+            pending_tool_call_ids=tuple(waiting_by_id),
             started=True,
             initial_facts=replayed.facts,
             final_answer_mode=policy.final_answer_mode,
@@ -389,6 +601,11 @@ class AgentTrustRuntime:
             pending_tool_call=tool_call,
             pending_approval=approval,
             pending_arguments=replayed.arguments_for(tool_call),
+            pending_tool_calls=waiting_by_id,
+            pending_approvals=approvals_by_call,
+            pending_arguments_by_call={
+                call_id: replayed.arguments_for(call) for call_id, call in waiting_by_id.items()
+            },
             timeout_seconds=timeout_seconds,
             permission_engine=permission_engine,
             tool_gateway=tool_gateway,
@@ -400,6 +617,12 @@ class AgentTrustRuntime:
             assert callable(register)
             register(restored_session)
         return restored_session
+
+    @staticmethod
+    def _validate_resume_tools(resume_tools: Sequence[object]) -> None:
+        for resume_tool in resume_tools:
+            if not callable(getattr(resume_tool, "register", None)):
+                raise ValueError("resume tools must provide a callable register(session) attribute")
 
     def cancel(self, run_id: str, actor_id: str | None = None) -> AgentSession:
         run_dir = resolve_run_dir(self.project_root, run_id)
@@ -420,7 +643,7 @@ class AgentTrustRuntime:
             policy_version=session.policy_version,
         )
         projection = SQLiteStateProjection(self.project_root)
-        projection.rebuild()
+        projection.rebuild_run(run_dir)
         evidence = ProjectingTraceRecorder(recorder, projection)
         journal = JsonlApprovalJournal(run_dir)
         for approval in replayed.approvals:
@@ -513,3 +736,15 @@ class AgentTrustRuntime:
         )
         recorder.append("run_completed", run_id=run_id, status="completed")
         return PythonRunResult(run_id=run_id, run_dir=run_dir, outcome=outcome)
+
+    async def execute_async(
+        self,
+        tool_name: str,
+        arguments: dict[str, object],
+        source: str = "python_sdk",
+    ) -> PythonRunResult:
+        """Execute one governed tool call through the async session API."""
+
+        async with self.async_session() as session:
+            tool_run = await session.execute_async(tool_name, arguments, source)
+        return PythonRunResult(run_id=session.run_id, run_dir=session.run_dir, outcome=tool_run.outcome)

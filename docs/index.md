@@ -7,6 +7,7 @@ AgentTrust Runtime 是本地优先的 Agent 工具执行控制层：它为现有
 - [快速入门](getting-started.md)：安装、首个可验证 run 与 Session API。
 - [CLI 参考](cli.md)：命令、审批恢复、MCP 和 OTel 导出。
 - [核心概念](concepts.md)：领域对象和状态机。
+- [协议与异步运行时](protocols.md)：Policy Protocol v1、schema、conformance fixture 与 async API。
 - [运行时架构](ARCHITECTURE.md)：控制路径、存储职责和包边界。
 - [威胁模型](THREAT_MODEL.md)：攻击者模型、覆盖控制与残余风险。
 - [相关工作与边界](RELATED_WORK.md)：项目定位与刻意不做的内容。
@@ -18,9 +19,9 @@ AgentTrust Runtime 是本地优先的 Agent 工具执行控制层：它为现有
 
 ## 当前保证
 
-1. 同一 session 的多次工具调用共享身份、策略快照、facts 与 hash-linked evidence。
-2. `ask` 在 noninteractive 运行中 fail closed；审批恢复绑定原始参数摘要。
-3. JSONL 是证据源，SQLite 可从已验证 trace 重建。
+1. 同一 session 的多次工具调用共享身份、策略快照、facts 与 hash-linked evidence；多个调用可同时等待审批。
+2. `ask` 在 noninteractive 运行中 fail closed；审批恢复绑定原始参数摘要，并可由 `tool_call_id` 精确选择。
+3. JSONL 是证据源，v1 envelope 与 v0.5 内存迁移兼容；SQLite 对普通运行增量投影。
 4. MCP config 的 inspect 不启动 server；真实调用需要 consent、tool trust 和未漂移的 fingerprint。
 5. OpenTelemetry 从 evidence 重建 span；项目不托管 Dashboard。
 6. `security-v1` 用 107 个确定性控制检查（100 个预期拦截与 7 个预期允许）回归上述控制。

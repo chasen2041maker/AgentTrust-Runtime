@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agenttrust.dev/schemas/decision-v1.schema.json",
+  "title": "AgentTrust Decision Protocol v1",
+  "type": "object",
+  "required": ["protocol_version", "run_id", "tool_call_id", "principal", "action", "resource", "context", "arguments_digest"],
+  "properties": {
+    "protocol_version": {"const": "agenttrust.policy/v1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "tool_call_id": {"type": "string", "minLength": 1},
+    "principal": {"$ref": "#/$defs/principal"},
+    "action": {"$ref": "#/$defs/action"},
+    "resource": {"$ref": "#/$defs/resource"},
+    "context": {"$ref": "#/$defs/context"},
+    "arguments_digest": {"type": "string", "pattern": "^sha256:"},
+    "attributes": {"type": "object"}
+  },
+  "$defs": {
+    "principal": {"type": "object", "required": ["actor_id", "roles"], "properties": {"actor_id": {"type": "string", "minLength": 1}, "agent_id": {"type": ["string", "null"]}, "roles": {"type": "array", "items": {"type": "string"}}}},
+    "action": {"type": "object", "required": ["type", "tool", "risk_level"], "properties": {"type": {"const": "tool.execute"}, "tool": {"type": "string", "minLength": 1}, "risk_level": {"type": "string"}}},
+    "resource": {"type": "object", "required": ["type", "id", "classification"], "properties": {"type": {"type": "string"}, "id": {"type": "string"}, "classification": {"type": "string"}}},
+    "context": {"type": "object", "required": ["runtime_mode", "sandbox_profile"], "properties": {"session_id": {"type": ["string", "null"]}, "runtime_mode": {"type": "string"}, "sandbox_profile": {"type": "string"}}}
+  }
+}

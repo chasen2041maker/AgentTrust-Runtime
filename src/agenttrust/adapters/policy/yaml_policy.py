@@ -10,7 +10,8 @@ import yaml
 from agenttrust.domain.policy import Policy
 
 
-DEFAULT_POLICY_TEXT = """project_root: .
+DEFAULT_POLICY_TEXT = """policy_version: agenttrust.policy/v1
+project_root: .
 mode: default
 
 final_answer:

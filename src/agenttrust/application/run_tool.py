@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from agenttrust.application.ports import (
+    AsyncToolExecutorPort,
     EvidenceRecord,
     EvidenceRecorderPort,
     FactMapperPort,
@@ -185,7 +186,7 @@ class RunToolUseCase:
             on_tool_call_status("executing")
         try:
             result = self._tool_executor.execute(intent, project_root)
-        except Exception:
+        except BaseException:
             if on_tool_call_status is not None:
                 on_tool_call_status("failed")
             raise
@@ -195,6 +196,154 @@ class RunToolUseCase:
             and result.status == "ok"
             and self._bind_recovery_checkpoint is not None
         ):
+            recovery_checkpoint = self._bind_recovery_checkpoint(intent, result, backup_record, project_root)
+            if recovery_checkpoint is not None:
+                self._evidence.append("write_recovery_checkpoint", **recovery_checkpoint.to_dict())
+        if on_tool_call_status is not None:
+            on_tool_call_status("succeeded" if result.status == "ok" else "failed")
+        facts = tuple(self._map_facts(result)) if self._map_facts is not None else ()
+        if facts and facts_path is not None and self._store_facts is not None:
+            self._store_facts(facts_path, facts)
+        self._evidence.append(
+            "fact_mapped",
+            run_id=intent.run_id,
+            tool_call_id=intent.tool_call_id,
+            tool_name=intent.tool_name,
+            fact_count=len(facts),
+            facts=[fact.to_dict() for fact in facts],
+        )
+        return ToolRunOutcome(
+            intent=intent,
+            permission_decision=permission_decision,
+            final_permission=final_permission,
+            hook_decision=hook_decision,
+            sandbox_decision=sandbox_decision,
+            result=result,
+            facts=facts,
+        )
+
+    async def execute_async(
+        self,
+        intent: ToolIntent,
+        *,
+        project_root: Path,
+        run_dir: Path,
+        runtime_mode: str,
+        hooks: tuple[HookRule, ...] = (),
+        approval_mode: str | None = None,
+        facts_path: Path | None = None,
+        on_tool_call_status: ToolStatusObserver | None = None,
+        approval_response: str | None = None,
+    ) -> ToolRunOutcome:
+        """Run the same policy pipeline while awaiting an AsyncToolExecutorPort."""
+
+        executor = self._tool_executor
+        if not isinstance(executor, AsyncToolExecutorPort):
+            raise TypeError("tool executor does not implement execute_async")
+        resolved_approval_mode = approval_mode or {
+            "interactive": "inline_prompt",
+            "noninteractive": "deny",
+            "test": "mock",
+        }.get(runtime_mode, "deny")
+        self._evidence.append("tool_intent", **intent.to_dict())
+        permission_decision = self._policy_evaluator.decide(intent)
+        hook_decision = self._evaluate_hooks(intent, hooks)
+        if hook_decision.hook_id is not None:
+            self._evidence.append("hook_decision", **hook_decision.to_dict())
+
+        if permission_decision.effect == "ask" and approval_response is None and on_tool_call_status is not None:
+            on_tool_call_status("waiting_approval")
+        if (
+            permission_decision.effect == "ask"
+            and approval_response is None
+            and resolved_approval_mode == "inline_prompt"
+            and hook_decision.effect != "deny"
+            and self._request_approval is not None
+        ):
+            self._evidence.append(
+                "approval_prompted",
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                reason=permission_decision.reason,
+                arguments=reviewable_arguments(intent.arguments),
+            )
+            approval_response = self._request_approval(permission_decision, intent.arguments)
+
+        if (
+            permission_decision.effect == "ask"
+            and approval_response is None
+            and resolved_approval_mode == "deferred"
+            and hook_decision.effect != "deny"
+        ):
+            final_permission = FinalPermission(
+                effect=permission_decision.effect,
+                final_effect="ask",
+                reason="approval_pending",
+                approval_required=True,
+            )
+        elif approval_response is not None:
+            final_permission = self._finalize_permission(permission_decision, "inline_prompt", approval_response)
+        else:
+            final_permission = self._finalize_permission(permission_decision, resolved_approval_mode, approval_response)
+        if hook_decision.effect == "deny" and final_permission.final_effect != "deny":
+            final_permission = FinalPermission(
+                effect=final_permission.effect,
+                final_effect="deny",
+                reason=hook_decision.reason,
+                approval_required=final_permission.approval_required,
+            )
+        permission_event = {
+            **permission_decision.to_dict(),
+            **final_permission.to_dict(),
+            "runtime_mode": runtime_mode,
+        }
+        self._evidence.append("permission_decision", **permission_event)
+        if final_permission.final_effect != "allow":
+            if final_permission.final_effect != "ask" and on_tool_call_status is not None:
+                on_tool_call_status("policy_denied")
+            return ToolRunOutcome(
+                intent=intent,
+                permission_decision=permission_decision,
+                final_permission=final_permission,
+                hook_decision=hook_decision,
+                sandbox_decision=None,
+                result=None,
+                facts=(),
+            )
+
+        if permission_decision.effect == "ask" and on_tool_call_status is not None:
+            on_tool_call_status("approved")
+        sandbox_decision = self._sandbox.check(intent)
+        self._evidence.append("sandbox_decision", **sandbox_decision.to_dict())
+        if sandbox_decision.effect != "allow":
+            if on_tool_call_status is not None:
+                on_tool_call_status("sandbox_denied")
+            return ToolRunOutcome(
+                intent=intent,
+                permission_decision=permission_decision,
+                final_permission=final_permission,
+                hook_decision=hook_decision,
+                sandbox_decision=sandbox_decision,
+                result=None,
+                facts=(),
+            )
+
+        backup_record = (
+            self._create_recovery_checkpoint(intent, project_root, run_dir)
+            if self._create_recovery_checkpoint is not None
+            else None
+        )
+        if on_tool_call_status is not None:
+            on_tool_call_status("executing")
+        try:
+            result = await executor.execute_async(intent, project_root)
+        except BaseException:
+            if on_tool_call_status is not None:
+                on_tool_call_status("failed")
+            raise
+        self._evidence.append("tool_result", **result.to_dict())
+        if backup_record is not None and result.status == "ok" and self._bind_recovery_checkpoint is not None:
             recovery_checkpoint = self._bind_recovery_checkpoint(intent, result, backup_record, project_root)
             if recovery_checkpoint is not None:
                 self._evidence.append("write_recovery_checkpoint", **recovery_checkpoint.to_dict())

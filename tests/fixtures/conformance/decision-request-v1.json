@@ -1,0 +1,29 @@
+{
+  "protocol_version": "agenttrust.policy/v1",
+  "run_id": "run_conformance",
+  "tool_call_id": "call_001",
+  "principal": {
+    "actor_id": "alice",
+    "agent_id": "coding-agent",
+    "roles": ["developer"]
+  },
+  "action": {
+    "type": "tool.execute",
+    "tool": "write_file",
+    "risk_level": "unknown"
+  },
+  "resource": {
+    "type": "file",
+    "id": "src/app.py",
+    "classification": "project-file"
+  },
+  "context": {
+    "session_id": "session_conformance",
+    "runtime_mode": "interactive",
+    "sandbox_profile": "standard"
+  },
+  "arguments_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "attributes": {
+    "path": "src/app.py"
+  }
+}

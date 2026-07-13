@@ -33,7 +33,7 @@
 
 ![AgentTrust Runtime control flow](docs/assets/runtime-flow.svg)
 
-> **v0.5.2 Beta / developer preview.** AgentTrust is suitable for local development, integration validation, and deterministic control regression. It is not a production-security guarantee. Review permissions, perform threat modeling, and use environment-level safeguards before connecting real systems.
+> **v0.6.0 Beta / developer preview.** AgentTrust is suitable for local development, integration validation, and deterministic control regression. It is not a production-security guarantee. Review permissions, perform threat modeling, and use environment-level safeguards before connecting real systems.
 
 ## What is AgentTrust?
 
@@ -77,6 +77,7 @@ The run directory contains the artifacts that actually occurred on that path:
 
 ```text
 trace.jsonl             # Local, append-oriented, hash-linked event source
+trace-head.json          # Verified append checkpoint for the trace head
 policy-snapshot.yaml    # Exact policy text used for the run
 facts.jsonl             # Structured facts mapped from tool results, when present
 groundguard-report.json # Final-answer verification result, when finalized
@@ -114,6 +115,39 @@ agenttrust approvals list
 agenttrust approvals inspect <approval_id>
 agenttrust approvals approve <approval_id> --reason "reviewed"
 agenttrust run resume <run_id>
+```
+
+## V0.6: policy protocol and async runtime
+
+The built-in YAML engine still accepts the existing policy format, while v0.6 exposes a portable request/response contract for external policy integrations. `policy explain` reports every matching rule, the tool default, and the precedence-selected decision; `lint` and `test` keep policy changes reviewable in CI.
+
+```powershell
+agenttrust policy lint .agenttrust/policy.yaml
+agenttrust policy test .agenttrust/policy.yaml policy-fixtures.json
+agenttrust policy explain .agenttrust/policy.yaml --tool write_file --path src/report.py
+```
+
+Use the async API when the hosting agent framework already owns an event loop. Native async handlers are awaited directly; built-in synchronous tools remain available through the gateway compatibility adapter.
+
+```python
+from agenttrust import AgentTrustRuntime, govern_async
+
+runtime = AgentTrustRuntime(Path("."), runtime_mode="test")
+
+async with runtime.async_session(actor_id="alice") as session:
+    async def summarize(text: str) -> str:
+        return text.upper()
+
+    governed_summarize = govern_async(
+        summarize, session=session, tool_name="summarize", default_effect="allow"
+    )
+    assert await governed_summarize("ready") == "READY"
+```
+
+A session can now hold more than one deferred approval. Decide each approval normally, then resume the intended call explicitly when there is more than one candidate:
+
+```powershell
+agenttrust run resume <run_id> --tool-call-id call_002
 ```
 
 For development installation and test commands, see [Contributing](CONTRIBUTING.md).
@@ -192,7 +226,7 @@ agenttrust mcp trust <server> --tool read_file
 
 ![Example evidence report](docs/assets/evidence-report-preview.svg)
 
-Evidence events are append-oriented JSONL records with previous-event hashes. `agenttrust evidence verify` validates a trace before replay, restore, or OpenTelemetry export. `agenttrust state rebuild` can reconstruct the local SQLite projection from verified traces.
+Evidence events are append-oriented, hash-linked JSONL records. New v1 events include a portable envelope, while verified readers migrate v0.5 traces in memory for compatibility. `trace-head.json` makes ordinary appends constant-time with respect to prior event count; stale checkpoints fall back to full verification. `agenttrust evidence verify` validates a trace before replay, restore, or OpenTelemetry export. `agenttrust state rebuild` can reconstruct the local SQLite projection from verified traces.
 
 For a governed `write_file`, the runtime records a restore point only after the write succeeds and binds the actual post-write digest. Restore is preview-only by default; a changed target is skipped unless `--force` is explicitly supplied.
 
@@ -258,7 +292,7 @@ Available now:
 
 - Session-scoped execution, persisted approval records, and replay from verified local evidence.
 - Local MCP stdio consent, tool trust, and drift checks.
-- Hash-linked evidence, SQLite projection rebuild, report generation, and OTLP export.
+- Versioned policy and evidence contracts, async session execution, hash-linked evidence, SQLite projection rebuild, report generation, and OTLP export.
 - GroundGuard-backed checks for required facts in a final answer.
 
 Known limitations:
@@ -272,13 +306,14 @@ Known limitations:
 
 ## Roadmap
 
-The next reliability work focuses on stronger evidence anchoring, OS-level MCP isolation, and broader policy-pack interoperability. The broader implementation history and planned boundaries are in the [architecture roadmap](docs/refactor-roadmap.md) and [enterprise architecture](docs/enterprise-architecture.md).
+The next reliability work focuses on external evidence anchoring, OS-level MCP isolation, and broader policy-pack interoperability. The broader implementation history and planned boundaries are in the [architecture roadmap](docs/refactor-roadmap.md) and [enterprise architecture](docs/enterprise-architecture.md).
 
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
 - [CLI reference](docs/cli.md)
 - [Core concepts](docs/concepts.md)
+- [Protocol and async runtime](docs/protocols.md)
 - [Runtime architecture](docs/ARCHITECTURE.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Related work and boundaries](docs/RELATED_WORK.md)
