@@ -22,6 +22,21 @@ def has_mcp_consent(project_root: Path, server_name: str) -> bool:
     return server_name in _consent_records(project_root / ".agenttrust" / "mcp-consent.json")
 
 
+def trust_mcp_server(project_root: Path, server_name: str, allowed_tools: list[str]) -> Path:
+    """Register a trusted local MCP server and its allowed tool surface."""
+    path = project_root / ".agenttrust" / "mcp-trust.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records = _consent_records(path)
+    records[server_name] = {"allowed_tools": sorted(set(allowed_tools))}
+    path.write_text(json.dumps(records, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def is_mcp_tool_trusted(project_root: Path, server_name: str, tool_name: str) -> bool:
+    record = _consent_records(project_root / ".agenttrust" / "mcp-trust.json").get(server_name)
+    return isinstance(record, dict) and tool_name in record.get("allowed_tools", [])
+
+
 def _consent_records(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}

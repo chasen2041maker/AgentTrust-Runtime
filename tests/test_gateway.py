@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agenttrust.runtime.gateway import ToolGateway
 from agenttrust.schemas import ToolIntent
-from agenttrust.mcp_lite import grant_mcp_consent
+from agenttrust.mcp_lite import grant_mcp_consent, trust_mcp_server
 
 
 def test_gateway_executes_read_file(tmp_path: Path) -> None:
@@ -50,9 +50,12 @@ def test_mcp_tool_requires_consent_outside_test_mode(tmp_path: Path) -> None:
     )
 
     denied = ToolGateway().execute(intent, tmp_path)
+    trust_mcp_server(tmp_path, "local-files", ["read_project_file"])
+    still_denied = ToolGateway().execute(intent, tmp_path)
     grant_mcp_consent(tmp_path, "local-files")
     allowed = ToolGateway().execute(intent, tmp_path)
 
     assert denied.status == "error"
-    assert denied.metadata["consent_required"] is True
+    assert denied.metadata["trust_required"] is True
+    assert still_denied.metadata["consent_required"] is True
     assert allowed.status == "ok"

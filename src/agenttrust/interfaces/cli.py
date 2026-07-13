@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from agenttrust.context_lite import build_context_pack, export_context_to_run
-from agenttrust.mcp_lite import grant_mcp_consent, inspect_mcp_config
+from agenttrust.mcp_lite import grant_mcp_consent, inspect_mcp_config, trust_mcp_server
 from agenttrust.memory_lite import add_memory, clear_memory, list_memory
 from agenttrust.adapters.policy.yaml_policy import DEFAULT_POLICY_TEXT, load_policy
 from agenttrust.runtime.fixtures import list_fixtures, run_fixture
@@ -92,6 +92,9 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_inspect.add_argument("path")
     mcp_consent = mcp_subparsers.add_parser("consent", help="Grant consent for a local MCP server.")
     mcp_consent.add_argument("server")
+    mcp_trust = mcp_subparsers.add_parser("trust", help="Trust an MCP server tool.")
+    mcp_trust.add_argument("server")
+    mcp_trust.add_argument("--tool", action="append", required=True)
 
     skills_parser = subparsers.add_parser("skills", help="Skill Lite helpers.")
     skills_subparsers = skills_parser.add_subparsers(dest="skills_command", required=True)
@@ -252,6 +255,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "mcp" and args.mcp_command == "consent":
         print(grant_mcp_consent(project_root, args.server))
+        return 0
+
+    if args.command == "mcp" and args.mcp_command == "trust":
+        print(trust_mcp_server(project_root, args.server, args.tool))
         return 0
 
     if args.command == "skills":
