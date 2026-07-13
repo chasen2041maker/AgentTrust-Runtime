@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from hashlib import sha256
+import json
 from typing import Any
 
 
@@ -62,3 +64,39 @@ class ToolResult:
             "error": self.error,
             "created_at": self.created_at,
         }
+
+
+@dataclass(frozen=True)
+class EvidenceEvent:
+    """A canonical, identity-aware execution evidence record."""
+
+    run_id: str
+    stage: str
+    actor_id: str = "local-user"
+    agent_id: str | None = None
+    session_id: str | None = None
+    tool_call_id: str | None = None
+    policy_version: str | None = None
+    risk_tags: tuple[str, ...] = ()
+    input_digest: str | None = None
+    output_digest: str | None = None
+    created_at: str = field(default_factory=utc_now_iso)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "stage": self.stage,
+            "actor_id": self.actor_id,
+            "agent_id": self.agent_id,
+            "session_id": self.session_id,
+            "tool_call_id": self.tool_call_id,
+            "policy_version": self.policy_version,
+            "risk_tags": list(self.risk_tags),
+            "input_digest": self.input_digest,
+            "output_digest": self.output_digest,
+            "created_at": self.created_at,
+        }
+
+    def digest(self) -> str:
+        payload = json.dumps(self.to_dict(), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        return "sha256:" + sha256(payload.encode("utf-8")).hexdigest()

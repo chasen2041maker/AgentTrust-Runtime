@@ -4,6 +4,19 @@ import json
 from pathlib import Path
 
 from agenttrust.runtime.recovery import restore_run
+from agenttrust.runtime.trace import TraceRecorder, verify_trace
+
+
+def test_trace_verification_detects_tampering(tmp_path: Path) -> None:
+    recorder = TraceRecorder(tmp_path / "run")
+    recorder.append("run_started", run_id="run")
+    recorder.append("run_completed", run_id="run")
+
+    assert verify_trace(recorder.trace_path)["valid"] is True
+
+    lines = recorder.trace_path.read_text(encoding="utf-8").splitlines()
+    recorder.trace_path.write_text(lines[0].replace("run_started", "tampered") + "\n" + lines[1] + "\n", encoding="utf-8")
+    assert verify_trace(recorder.trace_path)["valid"] is False
 
 
 def test_restore_skips_manifest_paths_outside_project_root(tmp_path: Path) -> None:

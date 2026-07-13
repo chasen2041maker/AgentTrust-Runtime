@@ -1,5 +1,5 @@
 """Compatibility exports for the JSONL evidence adapter."""
 
-from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace
+from agenttrust.adapters.evidence.jsonl_store import TraceRecorder, read_trace, verify_trace
 
-__all__ = ["TraceRecorder", "read_trace"]
+__all__ = ["TraceRecorder", "read_trace", "verify_trace"]
