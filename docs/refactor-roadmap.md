@@ -32,7 +32,8 @@ In progress for Phase 5:
 
 - Local MCP servers require an explicit persisted consent record outside deterministic test mode; grant it with `agenttrust mcp consent <server>`.
 - A trusted-server registry and command allowlist are available through `agenttrust mcp trust <server> --tool <tool>`.
-- `AgentTrustRuntime` provides an embeddable Python SDK entrypoint for custom agent loops; framework-specific examples remain to be implemented.
+- `AgentTrustRuntime` provides an embeddable Python SDK entrypoint for custom agent loops.
+- Framework adapter examples are available in `examples/openai_agents_sdk_adapter.py` and `examples/langgraph_tool_adapter.py`.
 
 ## Current Architecture Snapshot
 
