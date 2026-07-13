@@ -20,7 +20,18 @@ In progress for Phase 3:
 
 - YAML policy loading, filesystem path sandboxing, JSONL evidence storage, and the local tool gateway now live under `agenttrust.adapters`.
 - Legacy `permissions.*` and `runtime.*` import paths remain thin compatibility facades.
-- Individual local tool handlers, GroundGuard verification, and the CLI boundary still need to move to their final adapter/interface packages.
+- Local file, shell, Git, MCP and skill handlers plus GroundGuard verification now live in `agenttrust.adapters`; the CLI boundary remains to be moved to `interfaces`.
+
+In progress for Phase 4:
+
+- Each run records actor, agent, session, and an exact policy snapshot with a stable policy-version digest.
+- JSONL evidence events form a hash chain, verified through `agenttrust evidence verify <run_id>`.
+- The remaining work is to propagate identity/policy metadata to every evidence event and expose reports through dedicated application use cases.
+
+In progress for Phase 5:
+
+- Local MCP servers require an explicit persisted consent record outside deterministic test mode; grant it with `agenttrust mcp consent <server>`.
+- A trusted-server registry, command allowlist, and framework SDK entrypoints remain to be implemented.
 
 ## Current Architecture Snapshot
 

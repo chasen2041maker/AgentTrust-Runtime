@@ -47,3 +47,6 @@ All notable changes to AgentTrust Runtime are documented here.
 - Legacy schema and permission import paths now re-export the domain objects for migration compatibility.
 - YAML policy loading, filesystem sandboxing, JSONL trace storage, and the local tool gateway now have explicit adapter-layer homes with compatibility facades.
 - Recovery checkpoints and restore operations now live in the JSONL evidence adapter.
+- Local file, shell, Git, MCP, skill, and GroundGuard verification implementations now live under `adapters` with compatibility imports preserved.
+- Runs now record actor/session metadata, exact policy snapshots, and a verifiable JSONL evidence hash chain.
+- Local MCP execution now requires explicit persisted consent outside deterministic test mode.
