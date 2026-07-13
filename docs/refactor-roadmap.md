@@ -2,6 +2,20 @@
 
 This roadmap turns the current working runtime into the layered architecture described in [Enterprise Architecture Upgrade](enterprise-architecture.md).
 
+## Implementation Status
+
+Completed in the first refactor increment:
+
+- Phase 1 domain extraction: `ToolIntent`, `ToolResult`, policy rules, hook rules, and permission/sandbox decisions now live in `agenttrust.domain`.
+- Old `schemas.py` and `permissions.*` paths remain compatibility exports, so current CLI and library consumers keep working.
+- Import-boundary tests enforce that the domain has no CLI, YAML, subprocess, filesystem, or concrete-tool dependency.
+
+In progress for Phase 2:
+
+- `agenttrust.application` now defines explicit ports plus `RunToolUseCase`, `RunFixtureUseCase`, `BuildContextUseCase`, and `RestoreRunUseCase`.
+- The current fixture and live entrypoints compose `RunToolUseCase` with existing local adapters, preserving their evidence event sequence.
+- Application tests use in-memory ports; concrete adapter extraction remains the next migration step.
+
 ## Current Architecture Snapshot
 
 The current codebase is compact and testable:
@@ -28,12 +42,11 @@ Strengths:
 - Roadmap Lite features are covered by tests;
 - GroundGuard integration exists.
 
-Main architectural debt:
+Remaining architectural debt:
 
-- domain objects live beside infrastructure concerns;
-- fixture runner owns too much orchestration;
+- fixture setup still owns skill, memory, context, and final-answer orchestration;
 - CLI directly invokes concrete helpers;
-- ports are implicit rather than explicit;
+- several concrete adapters still live under their original feature modules;
 - enterprise metadata such as actor/session/policy version is not yet modeled;
 - evidence is append-only but not tamper-evident.
 

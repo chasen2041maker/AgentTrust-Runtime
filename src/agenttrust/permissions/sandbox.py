@@ -3,30 +3,10 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
 
-from agenttrust.schemas import ToolIntent
-
-
-@dataclass(frozen=True)
-class SandboxDecision:
-    run_id: str
-    tool_call_id: str
-    tool_name: str
-    effect: str
-    reason: str
-    path: str | None = None
-
-    def to_dict(self) -> dict[str, str | None]:
-        return {
-            "run_id": self.run_id,
-            "tool_call_id": self.tool_call_id,
-            "tool_name": self.tool_name,
-            "effect": self.effect,
-            "reason": self.reason,
-            "path": self.path,
-        }
+from agenttrust.domain.decisions import SandboxDecision
+from agenttrust.domain.models import ToolIntent
 
 
 class PathSandbox:

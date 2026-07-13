@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from agenttrust.application.run_tool import RunToolUseCase
 from agenttrust.context_lite import build_context_pack, export_context_to_run
 from agenttrust.groundguard_adapter import map_tool_result, verify_answer, write_coverage_report, write_facts
 from agenttrust.memory_lite import add_memory, append_run_summary, list_memory
@@ -249,6 +250,18 @@ def run_fixture(
     coverage_status: str | None = None
     skill_name = skill_override or fixture.skill
     skill_info = load_skill(project_root, skill_name) if skill_name else None
+    tool_runner = RunToolUseCase(
+        evidence=recorder,
+        policy_evaluator=permission_engine,
+        sandbox=sandbox,
+        tool_executor=gateway,
+        finalize_permission=finalize_permission,
+        evaluate_hooks=evaluate_pre_tool_hooks,
+        request_approval=request_interactive_approval,
+        create_recovery_checkpoint=create_backup_for_write,
+        map_facts=map_tool_result,
+        store_facts=write_facts,
+    )
 
     recorder.append(
         "run_started",
@@ -321,8 +334,6 @@ def run_fixture(
             source=source,
             runtime_mode=runtime_mode,
         )
-        recorder.append("tool_intent", **intent.to_dict())
-
         if skill_info is not None:
             allowed_tools = set(str(tool) for tool in skill_info.policy.get("allowed_tools", []))
             blocked_tools = set(str(tool) for tool in skill_info.policy.get("blocked_tools", []))
@@ -349,67 +360,31 @@ def run_fixture(
             decisions.append(skill_decision)
             recorder.append("skill_decision", **skill_decision)
 
-        permission_decision = permission_engine.decide(intent)
-        hook_decision = evaluate_pre_tool_hooks(intent, policy.hooks + fixture.hooks)
-        if hook_decision.hook_id is not None:
-            decisions.append(hook_decision.to_dict())
-            recorder.append("hook_decision", **hook_decision.to_dict())
-
-        approval_response = None
-        if permission_decision.effect == "ask" and runtime_mode == "interactive" and hook_decision.effect != "deny":
-            recorder.append(
-                "approval_request",
-                run_id=run_id,
-                tool_call_id=intent.tool_call_id,
-                tool_name=intent.tool_name,
-                reason=permission_decision.reason,
-            )
-            approval_response = request_interactive_approval(permission_decision)
-
-        final_permission = finalize_permission(permission_decision, runtime_mode, approval_response)
-        if hook_decision.effect == "deny" and final_permission.final_effect != "deny":
-            final_permission = type(final_permission)(
-                effect=final_permission.effect,
-                final_effect="deny",
-                reason=hook_decision.reason,
-                approval_required=final_permission.approval_required,
-            )
-        permission_event = {
-            **permission_decision.to_dict(),
-            **final_permission.to_dict(),
-            "runtime_mode": runtime_mode,
-        }
-        permission_counts[final_permission.final_effect] = permission_counts.get(final_permission.final_effect, 0) + 1
-        decisions.append(permission_event)
-        recorder.append("permission_decision", **permission_event)
-        if final_permission.final_effect != "allow":
-            continue
-
-        sandbox_decision = sandbox.check(intent)
-        recorder.append("sandbox_decision", **sandbox_decision.to_dict())
-        if sandbox_decision.effect != "allow":
-            decisions.append(sandbox_decision.to_dict())
-            continue
-
-        backup_record = create_backup_for_write(intent, project_root, run_dir)
-        if backup_record is not None:
-            recorder.append("backup_created", **backup_record.to_dict())
-
-        result = gateway.execute(intent, project_root)
-        tool_result_count += 1
-        recorder.append("tool_result", **result.to_dict())
-        facts = map_tool_result(result)
-        if facts:
-            all_facts.extend(facts)
-            write_facts(facts_path, facts)
-        recorder.append(
-            "fact_mapped",
-            run_id=run_id,
-            tool_call_id=intent.tool_call_id,
-            tool_name=intent.tool_name,
-            fact_count=len(facts),
-            facts=[fact.to_dict() for fact in facts],
+        outcome = tool_runner.execute(
+            intent,
+            project_root=project_root,
+            run_dir=run_dir,
+            runtime_mode=runtime_mode,
+            hooks=policy.hooks + fixture.hooks,
+            facts_path=facts_path,
         )
+        if outcome.hook_decision.hook_id is not None:
+            decisions.append(outcome.hook_decision.to_dict())
+        permission_counts[outcome.final_permission.final_effect] = (
+            permission_counts.get(outcome.final_permission.final_effect, 0) + 1
+        )
+        decisions.append(
+            {
+                **outcome.permission_decision.to_dict(),
+                **outcome.final_permission.to_dict(),
+                "runtime_mode": runtime_mode,
+            }
+        )
+        if outcome.sandbox_decision is not None and outcome.sandbox_decision.effect != "allow":
+            decisions.append(outcome.sandbox_decision.to_dict())
+        if outcome.result is not None:
+            tool_result_count += 1
+        all_facts.extend(outcome.facts)
 
     if fixture.final_answer is not None:
         (run_dir / "final-answer.md").write_text(fixture.final_answer, encoding="utf-8")

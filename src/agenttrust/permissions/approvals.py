@@ -2,26 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Callable
 
-from agenttrust.permissions.engine import PermissionDecision
-
-
-@dataclass(frozen=True)
-class FinalPermission:
-    effect: str
-    final_effect: str
-    reason: str
-    approval_required: bool = False
-
-    def to_dict(self) -> dict[str, str | bool]:
-        return {
-            "effect": self.effect,
-            "final_effect": self.final_effect,
-            "reason": self.reason,
-            "approval_required": self.approval_required,
-        }
+from agenttrust.domain.decisions import FinalPermission, PermissionDecision
 
 
 def finalize_permission(

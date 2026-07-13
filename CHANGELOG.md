@@ -7,6 +7,9 @@ All notable changes to AgentTrust Runtime are documented here.
 ### Added
 
 - Enterprise architecture upgrade plan and phased refactor roadmap.
+- Framework-free `domain` package for execution models, policy rules, hook rules, and decision records.
+- Explicit application ports and use cases for governed tool execution, fixture normalization, context packs, and restore operations.
+- Architecture boundary and in-memory application-use-case tests.
 - Core local-first runtime path:
   - `ToolIntent` / `ToolResult`
   - Permission Engine
@@ -37,3 +40,8 @@ All notable changes to AgentTrust Runtime are documented here.
 - Secret path blocking for `.env`, PEM files, and SSH paths.
 - Tool Registry default-effect fallback for risky tools such as `mcp_tool`.
 - Restore path constraints for project root and run-local backups.
+
+### Changed
+
+- Fixture and live tool execution now run through the application-layer `RunToolUseCase` while preserving existing CLI behavior and evidence event ordering.
+- Legacy schema and permission import paths now re-export the domain objects for migration compatibility.

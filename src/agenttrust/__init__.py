@@ -1,6 +1,6 @@
 """AgentTrust Runtime public package interface."""
 
-from agenttrust.schemas import ToolIntent, ToolResult
+from agenttrust.domain.models import ToolIntent, ToolResult
 
 __all__ = ["ToolIntent", "ToolResult"]
 

@@ -2,31 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from agenttrust.permissions.policy import Policy
-from agenttrust.schemas import ToolIntent
+from agenttrust.domain.decisions import PermissionDecision
+from agenttrust.domain.models import ToolIntent
+from agenttrust.domain.policy import Policy
 from agenttrust.tools.registry import get_tool_spec
-
-
-@dataclass(frozen=True)
-class PermissionDecision:
-    run_id: str
-    tool_call_id: str
-    tool_name: str
-    effect: str
-    reason: str
-    rule_id: str | None = None
-
-    def to_dict(self) -> dict[str, str | None]:
-        return {
-            "run_id": self.run_id,
-            "tool_call_id": self.tool_call_id,
-            "tool_name": self.tool_name,
-            "effect": self.effect,
-            "reason": self.reason,
-            "rule_id": self.rule_id,
-        }
 
 
 class PermissionEngine:
