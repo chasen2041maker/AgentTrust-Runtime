@@ -62,6 +62,15 @@ def test_replay_prints_timeline(tmp_path: Path, monkeypatch, capsys) -> None:
     assert "tool_result: shell -> ok" in output
 
 
+def test_evidence_verify_accepts_an_untampered_run(tmp_path: Path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["run-fixture", "verified_answer"]) == 0
+    run_id = _run_id_from_output(capsys.readouterr().out)
+
+    assert main(["evidence", "verify", run_id]) == 0
+    assert json.loads(capsys.readouterr().out)["valid"] is True
+
+
 def test_report_writes_markdown(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")

@@ -15,6 +15,7 @@ from agenttrust.runtime.fixtures import list_fixtures, run_fixture
 from agenttrust.runtime.live import run_live
 from agenttrust.runtime.recovery import restore_run
 from agenttrust.runtime.report import resolve_run_dir, timeline_lines, write_html_report, write_markdown_report
+from agenttrust.runtime.trace import verify_trace
 from agenttrust.skills_lite import ensure_demo_skill, list_skills, load_skill
 from agenttrust.tools.registry import get_tool_spec, list_tool_specs
 
@@ -68,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
     restore_parser.add_argument("run_id")
     restore_parser.add_argument("--file")
     restore_parser.add_argument("--dry-run", action="store_true")
+
+    evidence_parser = subparsers.add_parser("evidence", help="Evidence integrity helpers.")
+    evidence_subparsers = evidence_parser.add_subparsers(dest="evidence_command", required=True)
+    evidence_verify = evidence_subparsers.add_parser("verify", help="Verify a run evidence hash chain.")
+    evidence_verify.add_argument("run_id")
 
     policy_parser = subparsers.add_parser("policy", help="Policy helpers.")
     policy_subparsers = policy_parser.add_subparsers(dest="policy_command", required=True)
@@ -195,6 +201,11 @@ def main(argv: list[str] | None = None) -> int:
         actions = restore_run(resolve_run_dir(project_root, args.run_id), only_file=args.file, dry_run=args.dry_run)
         print(json.dumps(actions, ensure_ascii=False, indent=2))
         return 0
+
+    if args.command == "evidence" and args.evidence_command == "verify":
+        result = verify_trace(resolve_run_dir(project_root, args.run_id) / "trace.jsonl")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["valid"] else 2
 
     if args.command == "policy" and args.policy_command == "validate":
         policy_path = (project_root / args.path).resolve()
