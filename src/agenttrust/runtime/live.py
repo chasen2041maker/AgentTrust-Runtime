@@ -11,7 +11,7 @@ from agenttrust.application.run_tool import RunToolUseCase
 from agenttrust.runtime.fixtures import RunResult, create_run_id
 from agenttrust.permissions import PermissionEngine, evaluate_pre_tool_hooks, finalize_permission, load_policy
 from agenttrust.schemas import ToolIntent
-from agenttrust.groundguard_adapter import map_tool_result, write_facts
+from agenttrust.adapters.verification.mapper import map_tool_result, write_facts
 
 
 def run_live(name: str, project_root: Path, runtime_mode: str = "interactive") -> RunResult:

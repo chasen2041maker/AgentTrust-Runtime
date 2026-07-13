@@ -13,7 +13,8 @@ from agenttrust.adapters.sandbox.filesystem import PathSandbox
 from agenttrust.adapters.tools.gateway import ToolGateway
 from agenttrust.application.run_tool import RunToolUseCase
 from agenttrust.context_lite import build_context_pack, export_context_to_run
-from agenttrust.groundguard_adapter import map_tool_result, verify_answer, write_coverage_report, write_facts
+from agenttrust.adapters.verification.mapper import map_tool_result, write_facts
+from agenttrust.groundguard_adapter import verify_answer, write_coverage_report
 from agenttrust.memory_lite import add_memory, append_run_summary, list_memory
 from agenttrust.permissions import (
     HookRule,
