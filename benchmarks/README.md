@@ -1,6 +1,6 @@
 # AgentTrust Security Benchmark
 
-`security-v1` is a deterministic, local 100-case adversarial benchmark. It never runs a supplied shell command and never starts an MCP server; each case directly exercises the runtime control that should block it. Scratch artifacts are kept under `.agenttrust/benchmarks/security-v1/` by default.
+`security-v1` is a deterministic, local 100-case adversarial benchmark. It never runs a supplied shell command or a user-configured MCP server. Its first drift case launches only a packaged fake stdio server to exercise the real fingerprint check. Scratch artifacts are kept under `.agenttrust/benchmarks/security-v1/` by default.
 
 Run it from a project root:
 

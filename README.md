@@ -180,7 +180,7 @@ span 层级为 `agenttrust.session -> agenttrust.tool -> policy / approval / san
 
 ## 安全基准
 
-`security-v1` 是公开、确定性、可复现的 100 例攻击基准。运行时不会执行攻击 shell 命令，也不会启动 MCP server；它只直接触发应该拦截攻击的控制。
+`security-v1` 是公开、确定性、可复现的 100 例攻击基准。运行时不会执行攻击 shell 命令，也不会启动用户配置的 MCP server；首个 MCP drift 用例只启动项目内置的 fake stdio server，以验证真实 fingerprint 路径。
 
 ```powershell
 agenttrust benchmark security --output benchmark-report.json
