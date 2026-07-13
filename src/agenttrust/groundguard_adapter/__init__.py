@@ -1,7 +1,7 @@
 """GroundGuard-style fact mapping and verification adapter."""
 
 from agenttrust.adapters.verification.mapper import Fact, map_tool_result, write_facts
-from agenttrust.groundguard_adapter.verifier import CoverageReport, verify_answer, write_coverage_report
+from agenttrust.adapters.verification.verifier import CoverageReport, verify_answer, write_coverage_report
 
 __all__ = [
     "CoverageReport",
