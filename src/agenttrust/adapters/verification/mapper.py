@@ -93,6 +93,30 @@ def write_facts(path: Path, facts: Sequence[EvidenceRecord]) -> None:
             fact_file.write("\n")
 
 
+def read_facts(path: Path) -> list[Fact]:
+    """Load the structured fact ledger for a resumed session."""
+
+    if not path.exists():
+        return []
+    facts: list[Fact] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        raw = json.loads(line)
+        if not isinstance(raw, dict):
+            raise ValueError("fact ledger entries must be objects")
+        facts.append(
+            Fact(
+                key=_required_fact_text(raw, "key"),
+                value=_required_fact_text(raw, "value"),
+                unit=_optional_fact_text(raw, "unit"),
+                source_tool_call_id=_required_fact_text(raw, "source_tool_call_id"),
+                source_tool_name=_required_fact_text(raw, "source_tool_name"),
+            )
+        )
+    return facts
+
+
 def _metadata_fact(result: ToolResult, key: str, value: object, unit: str | None) -> Fact:
     return Fact(
         key=key,
@@ -101,3 +125,19 @@ def _metadata_fact(result: ToolResult, key: str, value: object, unit: str | None
         source_tool_call_id=result.tool_call_id,
         source_tool_name=result.tool_name,
     )
+
+
+def _required_fact_text(raw: dict[str, object], key: str) -> str:
+    value = raw.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"fact ledger requires a non-empty {key}")
+    return value
+
+
+def _optional_fact_text(raw: dict[str, object], key: str) -> str | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"fact ledger requires {key} to be a non-empty string or null")
+    return value

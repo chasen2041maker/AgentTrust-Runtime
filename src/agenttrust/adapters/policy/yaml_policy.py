@@ -13,6 +13,9 @@ from agenttrust.domain.policy import Policy
 DEFAULT_POLICY_TEXT = """project_root: .
 mode: default
 
+final_answer:
+  on_incomplete: warn
+
 rules:
   - id: block-secret-files
     tool: read_file

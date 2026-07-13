@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, cast
+from typing import Mapping, Sequence, cast
 from uuid import uuid4
 
 from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
@@ -16,7 +16,7 @@ from agenttrust.adapters.evidence.sqlite_state import SQLiteStateProjection
 from agenttrust.adapters.policy.yaml_policy import load_policy, snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
 from agenttrust.adapters.tools.gateway import ToolGateway
-from agenttrust.adapters.verification.mapper import map_tool_result, write_facts
+from agenttrust.adapters.verification.mapper import Fact, map_tool_result, read_facts, write_facts
 from agenttrust.application.governed_session import GovernedSession, SessionToolRun
 from agenttrust.application.ports import EvidenceRecorderPort
 from agenttrust.application.run_tool import RunToolUseCase, ToolRunOutcome
@@ -25,6 +25,7 @@ from agenttrust.domain.lifecycle import SessionStatus, ToolCallStatus
 from agenttrust.domain.models import ToolIntent
 from agenttrust.domain.policy import Policy
 from agenttrust.domain.sessions import AgentSession, SessionToolCall, arguments_digest
+from agenttrust.groundguard_adapter import CoverageReport, verify_answer, write_coverage_report
 from agenttrust.permissions import PermissionEngine, evaluate_pre_tool_hooks, finalize_permission, request_interactive_approval
 from agenttrust.runtime.fixtures import create_run_id
 
@@ -34,6 +35,19 @@ class PythonRunResult:
     run_id: str
     run_dir: Path
     outcome: ToolRunOutcome
+
+
+@dataclass(frozen=True)
+class FinalAnswerResult:
+    """GroundGuard coverage plus the session completion decision for one answer."""
+
+    coverage_report: CoverageReport
+    completed: bool
+    completion_action: str
+
+    @property
+    def status(self) -> str:
+        return self.coverage_report.status
 
 
 class AgentTrustSession:
@@ -123,6 +137,20 @@ class AgentTrustSession:
         self._pending_approval = None
         return result
 
+    def finalize_answer(self, answer: str, required_fact_keys: Sequence[str] = ()) -> FinalAnswerResult:
+        if not self._entered:
+            raise RuntimeError("final answers must be submitted inside the context manager")
+        facts = [fact for fact in self._governed_session.facts if isinstance(fact, Fact)]
+        report = verify_answer(answer, facts, list(required_fact_keys))
+        (self.run_dir / "final-answer.md").write_text(answer, encoding="utf-8")
+        write_coverage_report(self.run_dir / "groundguard-report.json", report)
+        outcome = self._governed_session.record_final_answer(answer, report.status, report.to_dict())
+        return FinalAnswerResult(
+            coverage_report=report,
+            completed=outcome.completed,
+            completion_action=outcome.completion_action,
+        )
+
 
 class AgentTrustRuntime:
     """Embed governed local tool execution inside a custom agent framework."""
@@ -170,6 +198,7 @@ class AgentTrustRuntime:
             hooks=policy.hooks,
             approval_journal=JsonlApprovalJournal(run_dir),
             defer_approvals=self.runtime_mode != "test",
+            final_answer_mode=policy.final_answer_mode,
         )
         evidence.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
         return AgentTrustSession(governed_session, evidence, self.runtime_mode)
@@ -234,6 +263,8 @@ class AgentTrustRuntime:
             approval_journal=JsonlApprovalJournal(run_dir),
             initial_sequence=max(call.sequence for call in (_tool_call_from_state(raw) for raw in state.list_tool_calls(run_id))),
             started=True,
+            initial_facts=read_facts(run_dir / "facts.jsonl"),
+            final_answer_mode=policy.final_answer_mode,
         )
         return AgentTrustSession(
             governed_session,

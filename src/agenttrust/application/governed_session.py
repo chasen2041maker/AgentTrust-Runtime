@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from agenttrust.application.ports import ApprovalJournalPort, EvidenceRecord, EvidenceRecorderPort
 from agenttrust.application.run_tool import RunToolUseCase, ToolRunOutcome
@@ -25,6 +25,14 @@ class SessionToolRun:
     approval_request: ApprovalRequest | None = None
 
 
+@dataclass(frozen=True)
+class FinalAnswerOutcome:
+    """The completion decision after recording one GroundGuard answer check."""
+
+    completed: bool
+    completion_action: str
+
+
 class GovernedSession:
     """Keep a single run, policy snapshot, identity, and evidence chain across calls."""
 
@@ -42,6 +50,8 @@ class GovernedSession:
         defer_approvals: bool = False,
         initial_sequence: int = 0,
         started: bool = False,
+        initial_facts: Sequence[EvidenceRecord] = (),
+        final_answer_mode: str = "warn",
     ) -> None:
         self._session = session
         self._tool_runner = tool_runner
@@ -55,7 +65,9 @@ class GovernedSession:
         self._sequence = initial_sequence
         self._started = started
         self._active_tool_call: SessionToolCall | None = None
-        self._facts: list[EvidenceRecord] = []
+        self._facts: list[EvidenceRecord] = list(initial_facts)
+        self._final_answer_mode = final_answer_mode
+        self._completion_blocked = False
 
     @property
     def session(self) -> AgentSession:
@@ -151,9 +163,34 @@ class GovernedSession:
     def close(self) -> AgentSession:
         if not self._started:
             raise RuntimeError("session has not started")
-        if self._session.status == "running":
+        if self._session.status == "running" and not self._completion_blocked:
             self._transition_session("completed")
         return self._session
+
+    def record_final_answer(
+        self,
+        answer: str,
+        coverage_status: str,
+        coverage_payload: Mapping[str, object],
+    ) -> FinalAnswerOutcome:
+        if not self._started:
+            raise RuntimeError("session has not started")
+        if self._session.status != "running":
+            raise RuntimeError(f"cannot finalize an answer while session is {self._session.status}")
+        self._evidence.append("final_answer_submitted", run_id=self._session.run_id, answer=answer)
+        self._evidence.append("groundguard_check", run_id=self._session.run_id, **coverage_payload)
+        if coverage_status == "verified":
+            self._completion_blocked = False
+            self._transition_session("completed")
+            return FinalAnswerOutcome(completed=True, completion_action="completed")
+        if self._final_answer_mode == "warn":
+            self._completion_blocked = False
+            self._transition_session("completed")
+            return FinalAnswerOutcome(completed=True, completion_action="warned")
+        self._completion_blocked = True
+        if self._final_answer_mode == "require_revision":
+            return FinalAnswerOutcome(completed=False, completion_action="revision_required")
+        return FinalAnswerOutcome(completed=False, completion_action="completion_denied")
 
     def resume_tool_call(
         self,
@@ -224,3 +261,5 @@ class GovernedSession:
     def _transition_session(self, status: SessionStatus) -> None:
         self._session = self._session.transition(status)
         self._evidence.append("session_status_changed", **self._session.to_dict())
+        if status == "completed":
+            self._evidence.append("session_completed", run_id=self._session.run_id)

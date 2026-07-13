@@ -10,6 +10,7 @@ from agenttrust.domain.models import ToolIntent
 
 
 VALID_EFFECTS = frozenset({"allow", "ask", "deny"})
+VALID_FINAL_ANSWER_MODES = frozenset({"warn", "deny_completion", "require_revision"})
 
 
 @dataclass(frozen=True)
@@ -97,9 +98,16 @@ class Policy:
     mode: str = "default"
     rules: tuple[PolicyRule, ...] = field(default_factory=tuple)
     hooks: tuple[HookRule, ...] = field(default_factory=tuple)
+    final_answer_mode: str = "warn"
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Policy":
+        final_answer = raw.get("final_answer", {}) or {}
+        if not isinstance(final_answer, dict):
+            raise ValueError("final_answer policy must contain a mapping")
+        final_answer_mode = str(final_answer.get("on_incomplete", "warn"))
+        if final_answer_mode not in VALID_FINAL_ANSWER_MODES:
+            raise ValueError(f"invalid final_answer on_incomplete mode: {final_answer_mode}")
         return cls(
             project_root=str(raw.get("project_root", ".")),
             mode=str(raw.get("mode", "default")),
@@ -108,4 +116,5 @@ class Policy:
                 HookRule.from_dict(hook)
                 for hook in ((raw.get("hooks", {}) or {}).get("pre_tool", ()) or ())
             ),
+            final_answer_mode=final_answer_mode,
         )

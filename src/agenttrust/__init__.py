@@ -1,8 +1,8 @@
 """AgentTrust Runtime public package interface."""
 
 from agenttrust.domain.models import ToolIntent, ToolResult
-from agenttrust.interfaces.python_api import AgentTrustRuntime, AgentTrustSession
+from agenttrust.interfaces.python_api import AgentTrustRuntime, AgentTrustSession, FinalAnswerResult
 
-__all__ = ["AgentTrustRuntime", "AgentTrustSession", "ToolIntent", "ToolResult"]
+__all__ = ["AgentTrustRuntime", "AgentTrustSession", "FinalAnswerResult", "ToolIntent", "ToolResult"]
 
 __version__ = "0.1.0"
