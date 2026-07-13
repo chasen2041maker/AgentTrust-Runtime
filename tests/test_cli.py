@@ -33,7 +33,7 @@ def test_run_fixture_records_tool_path(tmp_path: Path, monkeypatch, capsys) -> N
     monkeypatch.chdir(tmp_path)
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
 
-    exit_code = main(["run-fixture", "verified_answer"])
+    exit_code = main(["run-fixture", "verified_answer", "--mode", "test"])
 
     assert exit_code == 0
     run_id = _run_id_from_output(capsys.readouterr().out)
@@ -55,7 +55,7 @@ def test_run_fixture_records_tool_path(tmp_path: Path, monkeypatch, capsys) -> N
 def test_replay_prints_timeline(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
-    assert main(["run-fixture", "verified_answer"]) == 0
+    assert main(["run-fixture", "verified_answer", "--mode", "test"]) == 0
     run_id = _run_id_from_output(capsys.readouterr().out)
 
     exit_code = main(["replay", run_id])
@@ -63,13 +63,13 @@ def test_replay_prints_timeline(tmp_path: Path, monkeypatch, capsys) -> None:
     assert exit_code == 0
     output = capsys.readouterr().out
     assert "run_started" in output
-    assert "permission_decision: shell allow -> allow" in output
+    assert "permission_decision: shell ask -> allow" in output
     assert "tool_result: shell -> ok" in output
 
 
 def test_evidence_verify_accepts_an_untampered_run(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
-    assert main(["run-fixture", "verified_answer"]) == 0
+    assert main(["run-fixture", "verified_answer", "--mode", "test"]) == 0
     run_id = _run_id_from_output(capsys.readouterr().out)
 
     assert main(["evidence", "verify", run_id]) == 0
@@ -84,7 +84,7 @@ def test_evidence_verify_accepts_an_untampered_run(tmp_path: Path, monkeypatch, 
 def test_report_writes_markdown(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
-    assert main(["run-fixture", "verified_answer"]) == 0
+    assert main(["run-fixture", "verified_answer", "--mode", "test"]) == 0
     run_id = _run_id_from_output(capsys.readouterr().out)
 
     exit_code = main(["report", run_id])
@@ -98,7 +98,7 @@ def test_report_writes_markdown(tmp_path: Path, monkeypatch, capsys) -> None:
 def test_html_report_writes_file(tmp_path: Path, monkeypatch, capsys) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "README.md").write_text("# Demo\n", encoding="utf-8")
-    assert main(["run-fixture", "verified_answer"]) == 0
+    assert main(["run-fixture", "verified_answer", "--mode", "test"]) == 0
     run_id = _run_id_from_output(capsys.readouterr().out)
 
     exit_code = main(["report", run_id, "--format", "html"])
@@ -161,7 +161,7 @@ def test_fact_fixtures_record_expected_coverage_statuses(tmp_path: Path, monkeyp
         "unverified_answer": "unverified",
     }
     for fixture_name, status in expected.items():
-        assert main(["run-fixture", fixture_name]) == 0
+        assert main(["run-fixture", fixture_name, "--mode", "test"]) == 0
         run_id = _run_id_from_output(capsys.readouterr().out)
         report_path = tmp_path / ".agenttrust" / "runs" / run_id / "groundguard-report.json"
         report = json.loads(report_path.read_text(encoding="utf-8"))

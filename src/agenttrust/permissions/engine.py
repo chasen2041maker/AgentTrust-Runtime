@@ -44,13 +44,27 @@ class PermissionEngine:
             reason="no matching policy rule",
         )
 
-    def _default_tool_decision(self, intent: ToolIntent) -> PermissionDecision | None:
+    def _default_tool_decision(self, intent: ToolIntent) -> PermissionDecision:
         try:
             spec = get_tool_spec(intent.tool_name)
         except ValueError:
-            return None
+            return PermissionDecision(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                effect="deny",
+                reason="unregistered_tool",
+                rule_id="tool-registry:unregistered",
+            )
         if spec.default_effect == "allow":
-            return None
+            return PermissionDecision(
+                run_id=intent.run_id,
+                tool_call_id=intent.tool_call_id,
+                tool_name=intent.tool_name,
+                effect="allow",
+                reason="tool registry default effect: allow",
+                rule_id=f"tool-default:{intent.tool_name}",
+            )
         return PermissionDecision(
             run_id=intent.run_id,
             tool_call_id=intent.tool_call_id,

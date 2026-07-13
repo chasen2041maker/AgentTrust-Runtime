@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from agenttrust.runtime.gateway import ToolGateway
 from agenttrust.schemas import ToolIntent
@@ -60,3 +61,33 @@ def test_mcp_tool_requires_consent_outside_test_mode(tmp_path: Path) -> None:
     assert still_denied.metadata["consent_required"] is True
     assert allowed.status == "ok"
     assert allowed.metadata["mcp_sandbox_profile"] == "strict"
+
+
+def test_shell_accepts_argv_without_invoking_a_command_shell(tmp_path: Path) -> None:
+    intent = ToolIntent(
+        run_id="run_test",
+        tool_call_id="call_001",
+        tool_name="shell",
+        arguments={"argv": [sys.executable, "-c", "print('safe')"]},
+        source="test",
+    )
+
+    result = ToolGateway().execute(intent, tmp_path)
+
+    assert result.status == "ok"
+    assert result.output_preview.strip() == "safe"
+
+
+def test_shell_rejects_legacy_command_strings(tmp_path: Path) -> None:
+    intent = ToolIntent(
+        run_id="run_test",
+        tool_call_id="call_001",
+        tool_name="shell",
+        arguments={"command": "echo unsafe"},
+        source="test",
+    )
+
+    result = ToolGateway().execute(intent, tmp_path)
+
+    assert result.status == "error"
+    assert result.error == "shell requires a non-empty argv list of strings"

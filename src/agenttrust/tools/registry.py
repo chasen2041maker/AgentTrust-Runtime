@@ -41,8 +41,15 @@ TOOL_SPECS: dict[str, ToolSpec] = {
     "shell": ToolSpec(
         name="shell",
         category="process",
-        input_schema={"command": "string", "simulated_output": "string?"},
-        default_effect="allow",
+        input_schema={"argv": "string[]", "simulated_output": "string?"},
+        default_effect="ask",
+    ),
+    "unsafe_shell_command": ToolSpec(
+        name="unsafe_shell_command",
+        category="process",
+        input_schema={"command": "string"},
+        default_effect="ask",
+        source="explicit_compatibility",
     ),
     "git_diff": ToolSpec(
         name="git_diff",

@@ -96,3 +96,34 @@ def test_tool_registry_default_effect_is_safety_fallback() -> None:
 
     assert decision.effect == "ask"
     assert decision.rule_id == "tool-default:mcp_tool"
+
+
+def test_unregistered_tool_is_denied_before_gateway_execution() -> None:
+    intent = ToolIntent(
+        run_id="run",
+        tool_call_id="call",
+        tool_name="not_registered",
+        arguments={},
+        source="test",
+    )
+
+    decision = PermissionEngine(Policy()).decide(intent)
+
+    assert decision.effect == "deny"
+    assert decision.reason == "unregistered_tool"
+    assert decision.rule_id == "tool-registry:unregistered"
+
+
+def test_shell_registry_default_requires_approval() -> None:
+    intent = ToolIntent(
+        run_id="run",
+        tool_call_id="call",
+        tool_name="shell",
+        arguments={"argv": ["echo", "safe"]},
+        source="test",
+    )
+
+    decision = PermissionEngine(Policy()).decide(intent)
+
+    assert decision.effect == "ask"
+    assert decision.rule_id == "tool-default:shell"

@@ -4,7 +4,7 @@ from agenttrust.adapters.tools.file import read_file, write_file
 from agenttrust.adapters.tools.git import git_diff
 from agenttrust.adapters.tools.mcp import mcp_tool
 from agenttrust.tools.registry import ToolSpec, get_tool_spec, list_tool_specs
-from agenttrust.adapters.tools.shell import shell
+from agenttrust.adapters.tools.shell import shell, unsafe_shell_command
 from agenttrust.adapters.tools.skill import skill_context
 
 __all__ = [
@@ -15,6 +15,7 @@ __all__ = [
     "mcp_tool",
     "read_file",
     "shell",
+    "unsafe_shell_command",
     "skill_context",
     "write_file",
 ]

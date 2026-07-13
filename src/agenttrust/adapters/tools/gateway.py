@@ -7,7 +7,7 @@ from pathlib import Path
 
 from agenttrust.domain.models import ToolIntent, ToolResult
 from agenttrust.adapters.tools.file import read_file, write_file
-from agenttrust.adapters.tools.shell import shell
+from agenttrust.adapters.tools.shell import shell, unsafe_shell_command
 from agenttrust.adapters.tools.git import git_diff
 from agenttrust.adapters.tools.mcp import mcp_tool
 from agenttrust.adapters.tools.skill import skill_context
@@ -24,6 +24,7 @@ class ToolGateway:
             "read_file": read_file,
             "write_file": write_file,
             "shell": shell,
+            "unsafe_shell_command": unsafe_shell_command,
             "git_diff": git_diff,
             "mcp_tool": mcp_tool,
             "skill_context": skill_context,
