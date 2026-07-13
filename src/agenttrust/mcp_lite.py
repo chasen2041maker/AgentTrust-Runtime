@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 from pathlib import Path
+import tomllib
 from typing import Any
 
 from agenttrust.adapters.mcp.stdio import McpServerConfig, McpToolDescriptor
@@ -114,8 +115,8 @@ def mark_mcp_trust_stale(project_root: Path, server_name: str, reason: str) -> P
 def load_mcp_servers(path: Path) -> dict[str, McpServerConfig]:
     """Load launchable MCP stdio entries without starting any server."""
 
-    raw = json.loads(path.read_text(encoding="utf-8-sig"))
-    servers = raw.get("mcpServers", raw.get("servers", raw))
+    raw = _load_mcp_raw(path)
+    servers = _server_mapping(raw)
     if not isinstance(servers, dict):
         raise ValueError("MCP config must contain a mapping of servers")
     result: dict[str, McpServerConfig] = {}
@@ -142,15 +143,60 @@ def load_mcp_servers(path: Path) -> dict[str, McpServerConfig]:
 
 
 def resolve_mcp_server(project_root: Path, server_name: str) -> McpServerConfig | None:
-    """Resolve a named project-local server configuration without launching it."""
+    """Resolve a discovered local server configuration without launching it."""
 
-    for path in (project_root / ".mcp.json", project_root / ".agenttrust" / "mcp.json"):
-        if not path.exists():
+    for path in mcp_config_paths(project_root):
+        try:
+            config = load_mcp_servers(path).get(server_name)
+        except (OSError, ValueError):
             continue
-        config = load_mcp_servers(path).get(server_name)
         if config is not None:
             return config
     return None
+
+
+def mcp_config_paths(project_root: Path) -> tuple[Path, ...]:
+    """Return known Claude Code, Codex, Cursor, VS Code, and project config locations."""
+
+    home = Path.home()
+    candidates = (
+        project_root / ".mcp.json",
+        project_root / ".agenttrust" / "mcp.json",
+        project_root / ".claude" / "mcp.json",
+        project_root / ".codex" / "config.toml",
+        project_root / ".cursor" / "mcp.json",
+        project_root / ".vscode" / "mcp.json",
+        home / ".claude.json",
+        home / ".claude" / "mcp.json",
+        home / ".codex" / "config.toml",
+        home / ".cursor" / "mcp.json",
+        home / ".vscode" / "mcp.json",
+    )
+    return tuple(path for path in candidates if path.exists())
+
+
+def discover_mcp_servers(project_root: Path) -> list[dict[str, object]]:
+    """Statically discover local MCP configs without starting their commands."""
+
+    discovered: list[dict[str, object]] = []
+    for path in mcp_config_paths(project_root):
+        try:
+            servers = load_mcp_servers(path)
+        except (OSError, ValueError):
+            continue
+        for server in servers.values():
+            discovered.append(
+                {
+                    "name": server.name,
+                    "command": server.command,
+                    "args": list(server.args),
+                    "env_keys": sorted(server.env),
+                    "config_source": str(path),
+                    "client": _client_for_path(path),
+                    "risk": _risk_level({"command": server.command, "env": server.env}),
+                }
+            )
+    return sorted(discovered, key=lambda item: (str(item["name"]), str(item["config_source"])))
 
 
 def mcp_server_command_hash(config: McpServerConfig) -> str:
@@ -169,8 +215,8 @@ def _consent_records(path: Path) -> dict[str, object]:
 
 
 def inspect_mcp_config(path: Path) -> dict[str, Any]:
-    raw = json.loads(path.read_text(encoding="utf-8-sig"))
-    servers = raw.get("mcpServers", raw.get("servers", raw))
+    raw = _load_mcp_raw(path)
+    servers = _server_mapping(raw)
     if not isinstance(servers, dict):
         raise ValueError("MCP config must contain a mapping of servers")
     inspected = []
@@ -235,6 +281,36 @@ def _tool_fingerprint(descriptor: McpToolDescriptor) -> dict[str, str]:
         "description_hash": _schema_hash(descriptor.description),
         "input_schema_hash": _schema_hash(descriptor.input_schema),
     }
+
+
+def _load_mcp_raw(path: Path) -> dict[str, Any]:
+    if path.suffix.lower() == ".toml":
+        raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    else:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(raw, dict):
+        raise ValueError("MCP config must contain a mapping")
+    return raw
+
+
+def _server_mapping(raw: dict[str, Any]) -> dict[str, Any]:
+    servers = raw.get("mcpServers", raw.get("mcp_servers", raw.get("servers", raw)))
+    if not isinstance(servers, dict):
+        raise ValueError("MCP config must contain a mapping of servers")
+    return servers
+
+
+def _client_for_path(path: Path) -> str:
+    normalized = str(path).replace("\\", "/").lower()
+    if "/.claude" in normalized:
+        return "Claude Code"
+    if "/.codex" in normalized:
+        return "Codex"
+    if "/.cursor" in normalized:
+        return "Cursor"
+    if "/.vscode" in normalized:
+        return "VS Code"
+    return "project"
 
 
 def _risk_level(server: dict[str, Any]) -> str:

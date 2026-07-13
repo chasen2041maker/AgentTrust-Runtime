@@ -41,7 +41,7 @@ def mcp_tool(intent: ToolIntent, project_root: Path) -> ToolResult:
             metadata={"mcp_server_name": str(server), "consent_required": True},
         )
     config = resolve_mcp_server(project_root, server_name)
-    if config is not None and intent.runtime_mode != "test":
+    if config is not None and (intent.runtime_mode != "test" or mcp_trust_record(project_root, server_name) is not None):
         trust_record = mcp_trust_record(project_root, server_name)
         if trust_record is None:
             return ToolResult(

@@ -9,7 +9,17 @@ import sys
 from pathlib import Path
 
 from agenttrust.context_lite import build_context_pack, export_context_to_run
-from agenttrust.mcp_lite import grant_mcp_consent, inspect_mcp_config, trust_mcp_server
+from agenttrust.adapters.mcp.runtime import list_server_tools
+from agenttrust.mcp_lite import (
+    discover_mcp_servers,
+    grant_mcp_consent,
+    has_mcp_consent,
+    inspect_mcp_config,
+    resolve_mcp_server,
+    revoke_mcp_consent,
+    trust_mcp_server,
+    trust_mcp_server_surface,
+)
 from agenttrust.memory_lite import add_memory, clear_memory, list_memory
 from agenttrust.adapters.policy.yaml_policy import DEFAULT_POLICY_TEXT, load_policy
 from agenttrust.runtime.fixtures import list_fixtures, run_fixture
@@ -115,10 +125,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     mcp_parser = subparsers.add_parser("mcp", help="MCP Lite helpers.")
     mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command", required=True)
+    mcp_subparsers.add_parser("discover", help="Statically discover local MCP configs without starting servers.")
     mcp_inspect = mcp_subparsers.add_parser("inspect", help="Inspect an MCP config.")
-    mcp_inspect.add_argument("path")
+    mcp_inspect.add_argument("target", help="A config path or discovered server name.")
     mcp_consent = mcp_subparsers.add_parser("consent", help="Grant consent for a local MCP server.")
-    mcp_consent.add_argument("server")
+    mcp_consent.add_argument("action_or_server", help="grant/revoke plus server, or a legacy server name to grant")
+    mcp_consent.add_argument("server", nargs="?")
     mcp_trust = mcp_subparsers.add_parser("trust", help="Trust an MCP server tool.")
     mcp_trust.add_argument("server")
     mcp_trust.add_argument("--tool", action="append", required=True)
@@ -344,9 +356,21 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(spec.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
             return 0
 
+    if args.command == "mcp" and args.mcp_command == "discover":
+        print(json.dumps({"servers": discover_mcp_servers(project_root)}, ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "mcp" and args.mcp_command == "inspect":
         try:
-            payload = inspect_mcp_config((project_root / args.path).resolve())
+            candidate_path = (project_root / args.target).resolve()
+            if candidate_path.exists():
+                payload = inspect_mcp_config(candidate_path)
+            else:
+                config = resolve_mcp_server(project_root, args.target)
+                if config is None:
+                    raise ValueError(f"MCP server not found: {args.target}")
+                payload = inspect_mcp_config(config.config_path)
+                payload["servers"] = [server for server in payload["servers"] if server.get("name") == config.name]
         except (OSError, ValueError) as exc:
             print(f"invalid MCP config: {exc}", file=sys.stderr)
             return 2
@@ -354,11 +378,40 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "mcp" and args.mcp_command == "consent":
-        print(grant_mcp_consent(project_root, args.server))
+        if args.action_or_server in {"grant", "revoke"}:
+            if not args.server:
+                print(f"mcp consent {args.action_or_server} requires a server name", file=sys.stderr)
+                return 2
+            action = args.action_or_server
+            server_name = args.server
+        else:
+            action = "grant"
+            server_name = args.action_or_server
+        if action == "grant":
+            print(grant_mcp_consent(project_root, server_name))
+        else:
+            print(revoke_mcp_consent(project_root, server_name))
         return 0
 
     if args.command == "mcp" and args.mcp_command == "trust":
-        print(trust_mcp_server(project_root, args.server, args.tool, args.sandbox_profile))
+        try:
+            config = resolve_mcp_server(project_root, args.server)
+            if config is None:
+                print(trust_mcp_server(project_root, args.server, args.tool, args.sandbox_profile))
+                return 0
+            if not has_mcp_consent(project_root, args.server):
+                raise ValueError(f"MCP server '{args.server}' requires explicit consent before trust")
+            path = trust_mcp_server_surface(
+                project_root,
+                config,
+                list_server_tools(config),
+                args.tool,
+                args.sandbox_profile,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"MCP trust failed: {exc}", file=sys.stderr)
+            return 2
+        print(path)
         return 0
 
     if args.command == "skills":

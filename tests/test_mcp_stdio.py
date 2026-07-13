@@ -8,6 +8,8 @@ import sys
 
 from agenttrust.adapters.mcp.runtime import list_server_tools
 from agenttrust.adapters.tools.gateway import ToolGateway
+from agenttrust import AgentTrustRuntime
+from agenttrust.cli import main
 from agenttrust.domain.models import ToolIntent
 from agenttrust.mcp_lite import grant_mcp_consent, load_mcp_servers, mcp_trust_record, trust_mcp_server_surface
 
@@ -70,3 +72,42 @@ def test_schema_drift_marks_existing_mcp_trust_stale_and_blocks_call(tmp_path: P
     assert result.metadata["mcp_trust_status"] == "trust_stale"
     assert result.metadata["mcp_stale_reason"] == "tool_schema_changed"
     assert mcp_trust_record(tmp_path, "fake")["trust_status"] == "trust_stale"
+
+
+def test_mcp_cli_discovers_inspects_consents_and_trusts_a_real_stdio_server(tmp_path: Path, capsys) -> None:
+    _write_server_config(tmp_path)
+
+    assert main(["--project-root", str(tmp_path), "mcp", "discover"]) == 0
+    discovered = json.loads(capsys.readouterr().out)
+    assert any(server["name"] == "fake" for server in discovered["servers"])
+
+    assert main(["--project-root", str(tmp_path), "mcp", "inspect", "fake"]) == 0
+    inspected = json.loads(capsys.readouterr().out)
+    assert inspected["servers"][0]["name"] == "fake"
+    assert inspected["servers"][0]["env_keys"] == ["MCP_DRIFT"]
+
+    assert main(["--project-root", str(tmp_path), "mcp", "trust", "fake", "--tool", "echo"]) == 2
+    assert "requires explicit consent" in capsys.readouterr().err
+
+    assert main(["--project-root", str(tmp_path), "mcp", "consent", "grant", "fake"]) == 0
+    capsys.readouterr()
+    assert main(["--project-root", str(tmp_path), "mcp", "trust", "fake", "--tool", "echo"]) == 0
+    capsys.readouterr()
+    assert mcp_trust_record(tmp_path, "fake")["tool_fingerprints"]["echo"]["input_schema_hash"].startswith("sha256:")
+
+    assert main(["--project-root", str(tmp_path), "mcp", "consent", "revoke", "fake"]) == 0
+
+
+def test_real_mcp_call_is_recorded_in_a_governed_session_evidence_chain(tmp_path: Path) -> None:
+    _write_server_config(tmp_path)
+    _trust_fake_server(tmp_path)
+    runtime = AgentTrustRuntime(tmp_path, runtime_mode="test")
+
+    with runtime.session(actor_id="alice") as session:
+        result = session.execute("mcp_tool", {"server": "fake", "tool": "echo", "input": {"text": "trace"}})
+
+    assert result.outcome.result is not None
+    assert result.outcome.result.metadata["mcp_transport"] == "stdio"
+    events = [json.loads(line) for line in (session.run_dir / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    tool_result = next(event for event in events if event["event_type"] == "tool_result")
+    assert tool_result["metadata"]["mcp_transport"] == "stdio"
