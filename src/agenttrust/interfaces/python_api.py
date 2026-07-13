@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Mapping, Sequence, cast
 from uuid import uuid4
 
@@ -61,6 +62,7 @@ class AgentTrustSession:
         restored: bool = False,
         pending_tool_call: SessionToolCall | None = None,
         pending_approval: ApprovalRequest | None = None,
+        timeout_seconds: float | None = None,
     ) -> None:
         self._governed_session = governed_session
         self._evidence = evidence
@@ -68,6 +70,7 @@ class AgentTrustSession:
         self._restored = restored
         self._pending_tool_call = pending_tool_call
         self._pending_approval = pending_approval
+        self._deadline = monotonic() + timeout_seconds if timeout_seconds is not None else None
         self._entered = False
 
     @property
@@ -106,6 +109,8 @@ class AgentTrustSession:
     def __exit__(self, exception_type, exception, traceback) -> None:
         if exception is not None:
             self._governed_session.fail()
+        elif self._has_timed_out():
+            self._governed_session.timeout()
         else:
             self._governed_session.close()
         session = self._governed_session.session
@@ -120,11 +125,13 @@ class AgentTrustSession:
     ) -> SessionToolRun:
         if not self._entered:
             raise RuntimeError("session tools must execute inside the context manager")
+        self._raise_if_timed_out()
         return self._governed_session.execute(tool_name, arguments, source)
 
     def resume_pending_approval(self) -> SessionToolRun:
         if not self._entered:
             raise RuntimeError("session tools must execute inside the context manager")
+        self._raise_if_timed_out()
         if self._pending_tool_call is None or self._pending_approval is None:
             raise RuntimeError("session has no approved or denied pending tool call to resume")
         response = "approve" if self._pending_approval.decision == "approved" else "deny"
@@ -140,6 +147,7 @@ class AgentTrustSession:
     def finalize_answer(self, answer: str, required_fact_keys: Sequence[str] = ()) -> FinalAnswerResult:
         if not self._entered:
             raise RuntimeError("final answers must be submitted inside the context manager")
+        self._raise_if_timed_out()
         facts = [fact for fact in self._governed_session.facts if isinstance(fact, Fact)]
         report = verify_answer(answer, facts, list(required_fact_keys))
         (self.run_dir / "final-answer.md").write_text(answer, encoding="utf-8")
@@ -150,6 +158,14 @@ class AgentTrustSession:
             completed=outcome.completed,
             completion_action=outcome.completion_action,
         )
+
+    def _has_timed_out(self) -> bool:
+        return self._deadline is not None and monotonic() >= self._deadline
+
+    def _raise_if_timed_out(self) -> None:
+        if self._has_timed_out():
+            self._governed_session.timeout()
+            raise TimeoutError("governed session timed out")
 
 
 class AgentTrustRuntime:
@@ -165,7 +181,10 @@ class AgentTrustRuntime:
         actor_id: str | None = None,
         agent_id: str | None = None,
         session_id: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> AgentTrustSession:
+        if timeout_seconds is not None and timeout_seconds < 0:
+            raise ValueError("timeout_seconds must be zero or greater")
         run_id = create_run_id()
         run_dir = self.project_root / ".agenttrust" / "runs" / run_id
         recorder = TraceRecorder(run_dir)
@@ -201,9 +220,11 @@ class AgentTrustRuntime:
             final_answer_mode=policy.final_answer_mode,
         )
         evidence.append("policy_snapshot", run_id=run_id, policy_version=policy_version, path=str(snapshot_path))
-        return AgentTrustSession(governed_session, evidence, self.runtime_mode)
+        return AgentTrustSession(governed_session, evidence, self.runtime_mode, timeout_seconds=timeout_seconds)
 
-    def resume(self, run_id: str) -> AgentTrustSession:
+    def resume(self, run_id: str, timeout_seconds: float | None = None) -> AgentTrustSession:
+        if timeout_seconds is not None and timeout_seconds < 0:
+            raise ValueError("timeout_seconds must be zero or greater")
         state = SQLiteStateProjection(self.project_root)
         raw_session = state.get_session(run_id)
         if raw_session is None:
@@ -273,6 +294,7 @@ class AgentTrustRuntime:
             restored=True,
             pending_tool_call=tool_call,
             pending_approval=approval,
+            timeout_seconds=timeout_seconds,
         )
 
     def cancel(self, run_id: str, actor_id: str | None = None) -> AgentSession:

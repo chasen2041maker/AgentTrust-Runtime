@@ -248,6 +248,12 @@ class GovernedSession:
             self._transition_session("failed")
         return self._session
 
+    def timeout(self) -> AgentSession:
+        if self._started and not self._session.is_terminal:
+            self._evidence.append("session_timed_out", run_id=self._session.run_id)
+            self._transition_session("failed")
+        return self._session
+
     def _record_tool_status(self, status: ToolCallStatus) -> None:
         if self._active_tool_call is None:
             raise RuntimeError("tool call lifecycle event has no active tool call")
