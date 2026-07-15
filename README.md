@@ -26,14 +26,14 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Policy-fail--closed-C2410C" alt="Fail-closed policy" />
   <img src="https://img.shields.io/badge/Approvals-resumable-0369A1" alt="Resumable approvals" />
-  <img src="https://img.shields.io/badge/Evidence-hash--linked-7C3AED" alt="Hash-linked evidence" />
+  <img src="https://img.shields.io/badge/Evidence-hash--linked%20%2B%20signed-7C3AED" alt="Hash-linked and signed evidence" />
   <img src="https://img.shields.io/badge/Recovery-governed%20writes-0F766E" alt="Governed write recovery" />
   <img src="https://img.shields.io/badge/MCP-stdio%20%2B%20drift-D97706" alt="MCP stdio and drift controls" />
 </p>
 
 ![AgentTrust Runtime control flow](docs/assets/runtime-flow.svg)
 
-> **v0.6.0 Beta / developer preview.** AgentTrust is suitable for local development, integration validation, and deterministic control regression. It is not a production-security guarantee. Review permissions, perform threat modeling, and use environment-level safeguards before connecting real systems.
+> **v0.7.0 Beta / developer preview.** AgentTrust is suitable for local development, integration validation, and deterministic control regression. It is not a production-security guarantee. Review permissions, perform threat modeling, and use environment-level safeguards before connecting real systems.
 
 ## What is AgentTrust?
 
@@ -78,13 +78,14 @@ The run directory contains the artifacts that actually occurred on that path:
 ```text
 trace.jsonl             # Local, append-oriented, hash-linked event source
 trace-head.json          # Verified append checkpoint for the trace head
+trace-anchor.json        # Optional Ed25519 signature for one verified trace head
 policy-snapshot.yaml    # Exact policy text used for the run
 facts.jsonl             # Structured facts mapped from tool results, when present
 groundguard-report.json # Final-answer verification result, when finalized
 report.md / report.html # Generated from the verified run timeline
 ```
 
-`trace.jsonl` detects modifications inside its hash chain. It is not externally signed, immutable storage, or a non-repudiation system.
+`trace.jsonl` detects modifications inside its hash chain. An optional Ed25519 anchor signs one verified head, but it becomes a signer-identity check only when the verifier pins a public key obtained independently. Neither form provides a trusted timestamp, external witness, immutable storage, or non-repudiation.
 
 ## First governed session
 
@@ -125,6 +126,9 @@ The built-in YAML engine still accepts the existing policy format, while v0.6 ex
 agenttrust policy lint .agenttrust/policy.yaml
 agenttrust policy test .agenttrust/policy.yaml policy-fixtures.json
 agenttrust policy explain .agenttrust/policy.yaml --tool write_file --path src/report.py
+agenttrust policy export .agenttrust/policy.yaml --name local-baseline --version 1.0.0 --output policy-pack.json
+agenttrust policy inspect-pack policy-pack.json
+agenttrust policy import policy-pack.json --output imported-policy.yaml
 ```
 
 Use the async API when the hosting agent framework already owns an event loop. Native async handlers are awaited directly; built-in synchronous tools remain available through the gateway compatibility adapter.
@@ -151,6 +155,27 @@ agenttrust run resume <run_id> --tool-call-id call_002
 ```
 
 For development installation and test commands, see [Contributing](CONTRIBUTING.md).
+
+## V0.7: portable policy packs
+
+`policy export` writes the policy semantics AgentTrust actually enforces as a local `agenttrust.policy-pack/v1` JSON artifact. It contains a name, version, normalized policy v1 payload, and a canonical SHA-256 digest; `inspect-pack` validates all of them before printing. `policy import` validates first and refuses to overwrite an existing YAML policy unless `--force` is explicit.
+
+Policy packs are offline review artifacts, not a remote marketplace or a trust system. The digest detects corruption or stale edits inside a pack; it does not authenticate a malicious party that creates a new pack and recomputes its digest. Review the source and use signed evidence or a separately pinned digest for stronger provenance.
+
+## V0.7: signed evidence anchors
+
+Install the optional signing dependency, generate a passphrase-encrypted key pair, then sign a completed run. Keep the private key outside the repository and distribute the public key through an independent trusted channel.
+
+```powershell
+python -m pip install "agenttrust-runtime[signing] @ git+https://github.com/chasen2041maker/AgentTrust-Runtime.git"
+# Set this through your shell or CI secret store. Do not commit it.
+$env:AGENTTRUST_EVIDENCE_KEY_PASSPHRASE = "<secret>"
+agenttrust evidence keygen --private-key .agenttrust/keys/evidence-private.pem --public-key .agenttrust/keys/evidence-public.pem --passphrase-env AGENTTRUST_EVIDENCE_KEY_PASSPHRASE
+agenttrust evidence anchor <run_id> --private-key .agenttrust/keys/evidence-private.pem --passphrase-env AGENTTRUST_EVIDENCE_KEY_PASSPHRASE
+agenttrust evidence verify-anchor <run_id> --public-key .agenttrust/keys/evidence-public.pem
+```
+
+`anchor` signs the exact verified `run_id`, event count, head hash, signing time, and key fingerprint. Any later append or chain rewrite causes `verify-anchor` to fail until an authorized signer creates a fresh anchor.
 
 ## Why AgentTrust?
 
@@ -219,6 +244,7 @@ agenttrust mcp trust <server> --tool read_file
 - Discovery and inspection do not start the server or print environment-variable values.
 - Real calls require both server consent and tool-level trust.
 - Command, description, and input-schema drift invalidate trust and block subsequent calls.
+- A real stdio process receives only a small OS-runtime environment allowlist plus `env` values explicitly declared in the inspected MCP config. It starts in the config directory with inherited file descriptors closed; the trace records the mode and counts, never values.
 - Simulated calls are accepted only in test mode or when the runtime explicitly enables simulation; their facts are marked `test_only` and cannot verify a normal final answer.
 - Sandbox profiles are policy metadata today; they are **not** OS-level process or network isolation.
 
@@ -226,13 +252,14 @@ agenttrust mcp trust <server> --tool read_file
 
 ![Example evidence report](docs/assets/evidence-report-preview.svg)
 
-Evidence events are append-oriented, hash-linked JSONL records. New v1 events include a portable envelope, while verified readers migrate v0.5 traces in memory for compatibility. `trace-head.json` makes ordinary appends constant-time with respect to prior event count; stale checkpoints fall back to full verification. `agenttrust evidence verify` validates a trace before replay, restore, or OpenTelemetry export. `agenttrust state rebuild` can reconstruct the local SQLite projection from verified traces.
+Evidence events are append-oriented, hash-linked JSONL records. New v1 events include a portable envelope, while verified readers migrate v0.5 traces in memory for compatibility. `trace-head.json` makes ordinary appends constant-time with respect to prior event count; stale checkpoints fall back to full verification. `agenttrust evidence verify` validates a trace before replay, restore, or OpenTelemetry export; `agenttrust evidence anchor` optionally signs a verified head with Ed25519. `agenttrust state rebuild` can reconstruct the local SQLite projection from verified traces.
 
 For a governed `write_file`, the runtime records a restore point only after the write succeeds and binds the actual post-write digest. Restore is preview-only by default; a changed target is skipped unless `--force` is explicitly supplied.
 
 ```powershell
 agenttrust evidence verify <run_id>
 agenttrust evidence export <run_id>
+agenttrust evidence verify-anchor <run_id> --public-key <trusted-public-key.pem>
 agenttrust state rebuild
 agenttrust restore <run_id>
 agenttrust restore <run_id> --apply
@@ -244,6 +271,8 @@ Install `.[otel]` to rebuild evidence as OTLP HTTP spans for a backend such as P
 ## Final-answer verification
 
 `finalize_answer()` records a final answer and checks requested fact keys against facts produced in the current session. This adds a checkable link between a tool result and a claim; it does not prove the completeness or truth of arbitrary model output.
+
+`groundguard-report.json` records the originating run ID as its verification session. When the GroundGuard extra is installed, AgentTrust passes that same ID directly to `FactGate`, so the external fact report and the hash-linked trace share one session identifier.
 
 Set `verification.mode: groundguard_required` in policy to fail closed on missing or invalid GroundGuard output. The default `fallback` mode keeps the deterministic built-in verifier available for local development.
 
@@ -292,13 +321,14 @@ Available now:
 
 - Session-scoped execution, persisted approval records, and replay from verified local evidence.
 - Local MCP stdio consent, tool trust, and drift checks.
-- Versioned policy and evidence contracts, async session execution, hash-linked evidence, SQLite projection rebuild, report generation, and OTLP export.
+- Versioned policy and evidence contracts, import/exportable normalized policy packs, async session execution, hash-linked evidence, optional Ed25519 trace-head signatures, SQLite projection rebuild, report generation, and OTLP export.
 - GroundGuard-backed checks for required facts in a final answer.
 
 Known limitations:
 
-- Local evidence has no external signature, trusted timestamp, or immutable storage anchor.
-- Same-run evidence and state transitions use a cross-platform run lock; external signatures and immutable storage are still outside the local runtime boundary.
+- An Ed25519 anchor is a local signature artifact, not an external witness. It establishes signer identity only when verification pins a public key obtained independently.
+- Policy-pack digests detect an inconsistent artifact but do not authenticate the policy author or replace policy review.
+- Local evidence has no trusted timestamp, external witness, or immutable storage anchor. Same-run evidence and state transitions use a cross-platform run lock.
 - Custom functions wrapped with `govern()` must be registered again after a restart before resume.
 - Approval requests default to a one-hour TTL, configurable with `approvals.default_ttl_seconds` or a session override.
 - MCP sandbox profiles do not enforce OS-level process or network isolation.
@@ -306,7 +336,7 @@ Known limitations:
 
 ## Roadmap
 
-The next reliability work focuses on external evidence anchoring, OS-level MCP isolation, and broader policy-pack interoperability. The broader implementation history and planned boundaries are in the [architecture roadmap](docs/refactor-roadmap.md) and [enterprise architecture](docs/enterprise-architecture.md).
+The next reliability work focuses on external evidence witnessing or immutable storage, OS-level MCP isolation, and broader policy-pack interoperability. The broader implementation history and planned boundaries are in the [architecture roadmap](docs/refactor-roadmap.md) and [enterprise architecture](docs/enterprise-architecture.md).
 
 ## Documentation
 

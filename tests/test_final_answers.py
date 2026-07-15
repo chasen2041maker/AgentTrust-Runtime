@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,8 @@ def test_finalize_answer_binds_groundguard_report_to_the_active_session(tmp_path
     assert session.session.status == "completed"
     assert (session.run_dir / "final-answer.md").exists()
     assert (session.run_dir / "groundguard-report.json").exists()
+    report = json.loads((session.run_dir / "groundguard-report.json").read_text(encoding="utf-8"))
+    assert report["session_id"] == session.run_id
     events = read_trace(session.run_dir / "trace.jsonl")
     assert "final_answer_submitted" in [event["event_type"] for event in events]
     assert "groundguard_check" in [event["event_type"] for event in events]

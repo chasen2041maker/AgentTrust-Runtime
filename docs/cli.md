@@ -22,12 +22,18 @@ agenttrust report <run_id> [--format markdown|html]
 agenttrust evidence verify <run_id>
 agenttrust evidence export <run_id>
 agenttrust evidence export-otel <run_id> --endpoint <otlp-http-url>
+agenttrust evidence keygen --private-key <private.pem> --public-key <public.pem> --passphrase-env <ENV_NAME>
+agenttrust evidence anchor <run_id> --private-key <private.pem> --passphrase-env <ENV_NAME>
+agenttrust evidence verify-anchor <run_id> [--public-key <trusted-public.pem>]
 agenttrust state rebuild
 ```
 
 - `verify` 独立验证 JSONL hash chain。
 - `export` 写出面向 SIEM 或离线分析的 NDJSON。
 - `export-otel` 需要安装 `.[otel]`，并且只从已验证 evidence 重建 span。
+- `keygen` 需要安装 `.[signing]`，只生成加密私钥和对应公钥，拒绝覆盖已有密钥。私钥口令只能通过 `--passphrase-env` 指定的环境变量传入。
+- `anchor` 只会签名当前已验证 trace 的 `run_id`、事件数、head hash、签名时间和公钥指纹；后续 append 或重写会使 anchor 失效。
+- `verify-anchor` 默认使用 anchor 内附带的公钥验证数学签名；传入独立保存的 `--public-key` 才能把结果绑定到预期签名者身份。它不提供可信时间戳、外部见证或不可变存储。
 - `state rebuild` 扫描全部已验证 run；普通 session 与单个恢复流程只增量维护或修复目标 run。
 
 ## 审批、恢复与取消
@@ -51,12 +57,18 @@ agenttrust policy lint .agenttrust/policy.yaml
 agenttrust policy test .agenttrust/policy.yaml policy-fixtures.json
 agenttrust policy explain .agenttrust/policy.yaml --tool write_file --path src/report.py
 agenttrust policy explain .agenttrust/policy.yaml --tool shell --argv-json '["git", "status"]'
+agenttrust policy export .agenttrust/policy.yaml --name local-baseline --version 1.0.0 --output policy-pack.json
+agenttrust policy inspect-pack policy-pack.json
+agenttrust policy import policy-pack.json --output imported-policy.yaml
 ```
 
 - `validate` 解析策略文件。
 - `lint` 报告重复规则 ID、空原因和完全同范围但 effect 冲突的规则。
 - `test` 执行 JSON fixture。fixture 可以是数组，或 `{ "cases": [...] }`；每个 case 包含 `tool`、可选 `arguments` 和 `expected_effect`。
 - `explain` 输出协议请求、全部命中规则、工具默认 effect、优先级顺序与最终 `DecisionResponse`。
+- `export` 将运行时归一化后的 policy v1 语义导出为 `agenttrust.policy-pack/v1` JSON；已有输出文件必须显式传 `--force` 才会覆盖。
+- `inspect-pack` 在打印前校验 schema version、pack name/version、归一化 policy shape 和 canonical SHA-256 digest。
+- `import` 只有在所有检查通过后才写 YAML，默认拒绝覆盖。pack digest 只证明包内内容一致，不能证明作者身份或替代来源审查。
 
 ## 恢复受控写入
 

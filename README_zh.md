@@ -33,7 +33,7 @@
 
 ![AgentTrust Runtime 控制流程](docs/assets/runtime-flow.svg)
 
-> **v0.6.0 Beta / 开发者预览**：适合本地开发、集成验证和确定性控制回归。它不是生产安全保证；连接真实系统前仍需完成权限审查、独立威胁建模和环境级防护。
+> **v0.7.0 Beta / 开发者预览**：适合本地开发、集成验证和确定性控制回归。它不是生产安全保证；连接真实系统前仍需完成权限审查、独立威胁建模和环境级防护。
 
 ## AgentTrust 是什么？
 
@@ -78,13 +78,14 @@ Evidence 校验的预期输出：
 ```text
 trace.jsonl             # 本地、append-oriented、hash-linked 的事件源
 trace-head.json          # 已验证 trace 头部的追加检查点
+trace-anchor.json        # 某个已验证 trace 头部的可选 Ed25519 签名
 policy-snapshot.yaml    # 本次运行实际使用的策略文本
 facts.jsonl             # 有工具事实时生成的结构化账本
 groundguard-report.json # 调用 finalize_answer() 后生成的核验结果
 report.md / report.html # 从已验证时间线生成的报告
 ```
 
-`trace.jsonl` 可以检测 hash chain 内的改动；它不是外部签名、不可变存储，也不提供不可抵赖性。
+`trace.jsonl` 可以检测 hash chain 内的改动。可选 Ed25519 anchor 会签名一个已验证头部；只有验签方固定使用独立可信渠道获得的公钥时，它才构成签名者身份校验。两者都不提供可信时间戳、外部见证、不可变存储或不可抵赖性。
 
 ## 第一个受控会话
 
@@ -125,6 +126,9 @@ v0.6 保持现有 YAML 策略格式，同时提供可移植的 `DecisionRequest`
 agenttrust policy lint .agenttrust/policy.yaml
 agenttrust policy test .agenttrust/policy.yaml policy-fixtures.json
 agenttrust policy explain .agenttrust/policy.yaml --tool write_file --path src/report.py
+agenttrust policy export .agenttrust/policy.yaml --name local-baseline --version 1.0.0 --output policy-pack.json
+agenttrust policy inspect-pack policy-pack.json
+agenttrust policy import policy-pack.json --output imported-policy.yaml
 ```
 
 宿主框架已经使用事件循环时，可以使用异步会话。原生 async 工具会被直接 `await`，内建同步工具仍由网关兼容层提供。
@@ -151,6 +155,27 @@ agenttrust run resume <run_id> --tool-call-id call_002
 ```
 
 开发安装和测试命令见 [贡献指南](CONTRIBUTING.md)。
+
+## V0.7：可移植 policy pack
+
+`policy export` 会把 AgentTrust 实际执行的策略语义写成离线 `agenttrust.policy-pack/v1` JSON artifact，其中包含名称、版本、归一化 policy v1 内容和规范化 SHA-256 digest；`inspect-pack` 会先校验再展示。`policy import` 会先完成校验，除非显式给出 `--force`，否则拒绝覆盖已有 YAML policy。
+
+Policy pack 是离线审查 artifact，不是远程市场或信任系统。digest 能发现包内损坏或陈旧修改，但不能认证恶意主体重新创建并重新计算 digest 的行为；仍需审查来源，或通过已固定 digest、签名 evidence 等方式建立更强 provenance。
+
+## V0.7：签名 evidence anchor
+
+安装可选签名依赖，生成受口令保护的密钥对，再为已完成的 run 签名。私钥必须保存在仓库之外；公钥应通过独立可信渠道分发给验证方。
+
+```powershell
+python -m pip install "agenttrust-runtime[signing] @ git+https://github.com/chasen2041maker/AgentTrust-Runtime.git"
+# 通过 shell 或 CI secret store 注入，不要提交到仓库。
+$env:AGENTTRUST_EVIDENCE_KEY_PASSPHRASE = "<secret>"
+agenttrust evidence keygen --private-key .agenttrust/keys/evidence-private.pem --public-key .agenttrust/keys/evidence-public.pem --passphrase-env AGENTTRUST_EVIDENCE_KEY_PASSPHRASE
+agenttrust evidence anchor <run_id> --private-key .agenttrust/keys/evidence-private.pem --passphrase-env AGENTTRUST_EVIDENCE_KEY_PASSPHRASE
+agenttrust evidence verify-anchor <run_id> --public-key .agenttrust/keys/evidence-public.pem
+```
+
+`anchor` 会签名精确的 `run_id`、事件数、head hash、签名时间和密钥指纹。后续 append 或重写整条链都会让 `verify-anchor` 失败，直到授权签名者重新生成 anchor。
 
 ## 为什么需要 AgentTrust？
 
@@ -219,6 +244,7 @@ agenttrust mcp trust <server> --tool read_file
 - `discover` 和 `inspect` 不启动 server，也不输出环境变量值。
 - 真实调用需要 server consent 和 tool-level trust。
 - command、description 或 input schema 漂移会使 trust 失效，后续调用被阻断。
+- 真实 stdio 进程只接收少量 OS 运行时环境白名单，以及 inspected MCP config 中显式声明的 `env`；它以 config 所在目录启动并关闭继承句柄。trace 只记录模式和数量，不记录变量值。
 - 模拟调用只在 test 模式或运行时显式开启模拟能力时允许；其事实会标为 `test_only`，不能用于验证普通模式的最终答案。
 - 当前 sandbox profile 是策略元数据，**不是**操作系统级进程或网络隔离。
 
@@ -226,13 +252,14 @@ agenttrust mcp trust <server> --tool read_file
 
 ![Evidence 报告示例](docs/assets/evidence-report-preview.svg)
 
-Evidence 事件是带前序 hash 的 append-oriented JSONL 记录。新的 v1 事件带有可移植 envelope，读取已验证的 v0.5 trace 时会在内存中完成兼容迁移。`trace-head.json` 让正常追加不随历史事件数线性变慢；检查点缺失或陈旧时会回退到完整验证。`agenttrust evidence verify` 会在 replay、restore 或 OpenTelemetry 导出前验证 trace；`agenttrust state rebuild` 可从已验证 trace 重建本地 SQLite 投影。
+Evidence 事件是带前序 hash 的 append-oriented JSONL 记录。新的 v1 事件带有可移植 envelope，读取已验证的 v0.5 trace 时会在内存中完成兼容迁移。`trace-head.json` 让正常追加不随历史事件数线性变慢；检查点缺失或陈旧时会回退到完整验证。`agenttrust evidence verify` 会在 replay、restore 或 OpenTelemetry 导出前验证 trace；`agenttrust evidence anchor` 可选择用 Ed25519 对已验证头部签名。`agenttrust state rebuild` 可从已验证 trace 重建本地 SQLite 投影。
 
 对受控的 `write_file`，运行时只会在写入成功后记录恢复点，并绑定实际写后 digest。恢复默认只预览；目标文件在运行后被修改时会跳过，除非显式使用 `--force`。
 
 ```powershell
 agenttrust evidence verify <run_id>
 agenttrust evidence export <run_id>
+agenttrust evidence verify-anchor <run_id> --public-key <trusted-public-key.pem>
 agenttrust state rebuild
 agenttrust restore <run_id>
 agenttrust restore <run_id> --apply
@@ -244,6 +271,8 @@ agenttrust report <run_id> --format html
 ## 最终答案核验
 
 `finalize_answer()` 会记录最终答案，并把要求的 fact key 与当前会话产出的 facts 对照。这在工具结果与答案声明之间提供可检查的关联，但不证明任意模型输出的完整性或真实性。
+
+`groundguard-report.json` 会记录来源 run ID 作为 verification session。安装 GroundGuard extra 后，AgentTrust 会把同一个 ID 直接传给 `FactGate`，因此外部事实报告和 hash-linked trace 共享同一个会话标识。
 
 可在策略中设置 `verification.mode: groundguard_required`，让缺失或无效的 GroundGuard 输出明确成为未验证结果。默认 `fallback` 模式保留适用于本地开发的内置确定性核验器。
 
@@ -292,13 +321,14 @@ JSON 报告包含 case ID、预期与实际结果、类别计数和 policy laten
 
 - 会话级执行、持久化审批记录，以及从已验证本地 evidence replay。
 - 本地 MCP stdio 的 consent、tool trust 和 drift 检查。
-- 版本化策略与 evidence 协议、异步会话执行、hash-linked evidence、SQLite 投影重建、报告生成和 OTLP 导出。
+- 版本化策略与 evidence 协议、可导入导出的归一化 policy pack、异步会话执行、hash-linked evidence、可选 Ed25519 trace-head 签名、SQLite 投影重建、报告生成和 OTLP 导出。
 - GroundGuard 支持的最终答案必需事实检查。
 
 已知限制：
 
-- 本地 evidence 没有外部签名、可信时间戳或不可变存储锚点。
-- 同一 run 的 evidence 和状态转换使用跨平台运行锁；外部签名和不可变存储仍不属于本地运行时的边界。
+- Ed25519 anchor 是本地签名 artifact，不是外部见证；只有验证方固定使用独立获得的公钥时才可确认签名者身份。
+- Policy pack digest 能发现不一致 artifact，但不能认证策略作者，也不能替代策略审查。
+- 本地 evidence 没有可信时间戳、外部见证或不可变存储锚点；同一 run 的 evidence 和状态转换使用跨平台运行锁。
 - `govern()` 包装的自定义函数需要在重启后再次注册，才能恢复执行。
 - 审批请求默认 TTL 为一小时，可通过 `approvals.default_ttl_seconds` 或 session override 配置。
 - MCP sandbox profile 尚未实现 OS 级进程或网络隔离。
@@ -306,7 +336,7 @@ JSON 报告包含 case ID、预期与实际结果、类别计数和 policy laten
 
 ## 路线图
 
-下一阶段会聚焦外部 evidence anchoring、OS 级 MCP 隔离，以及更广泛的 policy pack 互操作性。完整的实施历史和计划边界见[重构路线图](docs/refactor-roadmap.md)与[企业架构方案](docs/enterprise-architecture.md)。
+下一阶段会聚焦外部 evidence 见证或不可变存储、OS 级 MCP 隔离，以及更广泛的 policy pack 互操作性。完整的实施历史和计划边界见[重构路线图](docs/refactor-roadmap.md)与[企业架构方案](docs/enterprise-architecture.md)。
 
 ## 文档
 

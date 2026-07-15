@@ -12,6 +12,7 @@ from agenttrust.domain.protocol import POLICY_PROTOCOL_VERSION
 
 
 VALID_EFFECTS = frozenset({"allow", "ask", "deny"})
+VALID_HOOK_ACTIONS = frozenset({"deny"})
 VALID_FINAL_ANSWER_MODES = frozenset({"warn", "deny_completion", "require_revision"})
 VALID_VERIFICATION_MODES = frozenset({"fallback", "groundguard_required"})
 
@@ -80,6 +81,23 @@ class PolicyRule:
                 return False
         return True
 
+    def to_dict(self) -> dict[str, object]:
+        """Return the normalized, portable representation enforced at runtime."""
+
+        payload: dict[str, object] = {
+            "id": self.id,
+            "tool": self.tool,
+            "effect": self.effect,
+            "reason": self.reason,
+        }
+        if self.paths:
+            payload["paths"] = list(self.paths)
+        if self.command_patterns:
+            payload["command_patterns"] = list(self.command_patterns)
+        if self.argv_patterns:
+            payload["argv_patterns"] = [list(pattern) for pattern in self.argv_patterns]
+        return payload
+
 
 def _normalized_argv(raw_argv: object) -> tuple[str, ...] | None:
     if not isinstance(raw_argv, list) or not raw_argv:
@@ -121,16 +139,21 @@ class HookRule:
     reason: str
     path_glob: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.action not in VALID_HOOK_ACTIONS:
+            raise ValueError(f"invalid hook action: {self.action}; pre-tool hooks may only deny")
+
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "HookRule":
         when = raw.get("when", {}) or {}
         if not isinstance(when, dict):
             when = {}
         path_glob = raw.get("path_glob", when.get("path_glob"))
+        action = str(raw.get("action", "deny"))
         return cls(
             id=str(raw.get("id", "unnamed-hook")),
             tool=str(raw.get("tool", when.get("tool", "*"))),
-            action=str(raw.get("action", "deny")),
+            action=action,
             reason=str(raw.get("reason", "blocked by hook")),
             path_glob=str(path_glob) if path_glob is not None else None,
         )
@@ -144,6 +167,14 @@ class HookRule:
                 return False
             return fnmatch(path.replace("\\", "/"), self.path_glob.replace("\\", "/"))
         return True
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the normalized pre-tool hook representation."""
+
+        when: dict[str, object] = {"tool": self.tool}
+        if self.path_glob is not None:
+            when["path_glob"] = self.path_glob
+        return {"id": self.id, "when": when, "action": self.action, "reason": self.reason}
 
 
 @dataclass(frozen=True)
@@ -199,3 +230,19 @@ class Policy:
             verification_mode=verification_mode,
             approval_ttl_seconds=approval_ttl_seconds,
         )
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the full normalized policy semantics used by the runtime."""
+
+        payload: dict[str, object] = {
+            "policy_version": self.protocol_version,
+            "project_root": self.project_root,
+            "mode": self.mode,
+            "final_answer": {"on_incomplete": self.final_answer_mode},
+            "verification": {"mode": self.verification_mode},
+            "approvals": {"default_ttl_seconds": self.approval_ttl_seconds},
+            "rules": [rule.to_dict() for rule in self.rules],
+        }
+        if self.hooks:
+            payload["hooks"] = {"pre_tool": [hook.to_dict() for hook in self.hooks]}
+        return payload

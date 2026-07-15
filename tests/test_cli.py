@@ -213,6 +213,11 @@ def test_run_live_uses_live_adapter_source(tmp_path: Path, monkeypatch, capsys) 
     intent = next(event for event in events if event["event_type"] == "tool_intent")
     assert intent["source"] == "live_adapter"
     assert intent["tool_name"] == "read_file"
+    coverage = next(event for event in events if event["event_type"] == "groundguard_check")
+    assert coverage["session_id"] == run_id
+    report = json.loads((tmp_path / ".agenttrust" / "runs" / run_id / "groundguard-report.json").read_text())
+    assert report["status"] == "verified"
+    assert report["session_id"] == run_id
 
 
 def test_policy_validate_loads_policy(tmp_path: Path, monkeypatch, capsys) -> None:

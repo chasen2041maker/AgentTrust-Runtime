@@ -37,8 +37,9 @@ def invoke_trusted_mcp_tool(
             error="MCP server command changed since trust was granted",
             metadata={"mcp_trust_status": "trust_stale", "mcp_stale_reason": "server_command_changed"},
         )
+    client = McpStdioClient(config, timeout_seconds=timeout_seconds)
     try:
-        with McpStdioClient(config, timeout_seconds=timeout_seconds) as client:
+        with client:
             descriptors = client.list_tools()
             descriptor = next((item for item in descriptors if item.name == tool_name), None)
             if descriptor is None:
@@ -66,7 +67,11 @@ def invoke_trusted_mcp_tool(
         return McpInvocationResult(
             status="error",
             error=str(exc),
-            metadata={"mcp_transport": "stdio", "mcp_error_type": type(exc).__name__},
+            metadata={
+                "mcp_transport": "stdio",
+                "mcp_error_type": type(exc).__name__,
+                **client.launch_metadata.to_dict(),
+            },
         )
 
     return McpInvocationResult(
@@ -78,6 +83,7 @@ def invoke_trusted_mcp_tool(
             "mcp_tool_description_hash": actual["description_hash"],
             "mcp_server_command_hash": mcp_server_command_hash(config),
             "mcp_response": response,
+            **client.launch_metadata.to_dict(),
         },
     )
 

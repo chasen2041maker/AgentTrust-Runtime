@@ -77,8 +77,12 @@ benchmark/     公开的确定性安全控制回归数据集
 
 ## MCP 边界
 
-真实 stdio MCP 的执行顺序是：静态发现、inspect、consent、`tools/list`、tool trust、fingerprint 校验、`tools/call`。command hash、工具 description hash 和 input schema hash 都进入信任记录；漂移使记录失效，调用被拒绝并写入 evidence。
+真实 stdio MCP 的执行顺序是：静态发现、inspect、consent、`tools/list`、tool trust、fingerprint 校验、`tools/call`。command hash、工具 description hash 和 input schema hash 都进入信任记录；漂移使记录失效，调用被拒绝并写入 evidence。启动真实进程时，adapter 只传递小型 OS 运行时环境白名单与 MCP config 中显式声明的 `env`，以 config 目录为工作目录并关闭继承句柄；evidence 保存模式和数量而不保存变量值。
+
+## Policy Pack 边界
+
+`adapters/policy/pack.py` 把 runtime-normalized `Policy` 导出为 `agenttrust.policy-pack/v1` JSON，并在导入前重新验证协议版本、字段形状和 canonical digest。pack 不是远程安装机制，导入也不会默认覆盖 `.agenttrust/policy.yaml`；digest 确保 artifact 内部一致，不构成作者身份签名。
 
 ## 最终答案与可观测性
 
-工具结果经 mapper 形成显式 facts；`finalize_answer()` 将答案与同一 session 的 facts 交给 GroundGuard。证据 export 不创建第二个事实源：OTel adapter 从 JSONL 重建 `agenttrust.session`、工具阶段和最终答案 span，供 OTLP 后端消费。
+工具结果经 mapper 形成显式 facts；`finalize_answer()` 将答案与同一 session 的 facts 交给 GroundGuard，并将本次 `run_id` 作为 FactGate session ID 写入核验报告和 evidence。证据 export 不创建第二个事实源：OTel adapter 从 JSONL 重建 `agenttrust.session`、工具阶段和最终答案 span，供 OTLP 后端消费。

@@ -47,7 +47,8 @@ flowchart TB
 | 审批 | SQLite/JSONL 持久化，参数摘要绑定，resume/cancel | approval/recovery tests |
 | 身份与政策 | actor/agent/session/policy version 写入 evidence | session tests |
 | 文件恢复 | run-local backup 和路径约束 | recovery tests |
-| MCP | consent、trust、command/schema drift | real stdio fixture tests |
+| MCP | consent、trust、command/schema drift、allowlisted process environment | real stdio fixture tests |
+| Policy pack | normalized v1 export/import、canonical digest、explicit overwrite | policy-pack tests/schema fixture |
 | evidence | hash-linked JSONL、state rebuild | tamper/rebuild tests |
 | 可观测性 | OTel 从 evidence 重建 span | in-memory exporter test |
 | 最终答案 | GroundGuard 与 session facts 绑定 | final-answer tests |

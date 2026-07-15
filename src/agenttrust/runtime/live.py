@@ -9,11 +9,12 @@ from agenttrust.adapters.evidence.jsonl_store import TraceRecorder
 from agenttrust.adapters.policy.yaml_policy import snapshot_policy
 from agenttrust.adapters.sandbox.filesystem import PathSandbox
 from agenttrust.adapters.tools.gateway import ToolGateway
+from agenttrust.groundguard_adapter import verify_answer, write_coverage_report
 from agenttrust.application.run_tool import RunToolUseCase
 from agenttrust.runtime.fixtures import RunResult, create_run_id
 from agenttrust.permissions import PermissionEngine, evaluate_pre_tool_hooks, finalize_permission, load_policy
 from agenttrust.schemas import ToolIntent
-from agenttrust.adapters.verification.mapper import map_tool_result, write_facts
+from agenttrust.adapters.verification.mapper import Fact, map_tool_result, write_facts
 
 
 def run_live(name: str, project_root: Path, runtime_mode: str = "interactive") -> RunResult:
@@ -63,13 +64,29 @@ def run_live(name: str, project_root: Path, runtime_mode: str = "interactive") -
         source="live_adapter",
         runtime_mode=runtime_mode,
     )
-    tool_runner.execute(
+    outcome = tool_runner.execute(
         intent,
         project_root=project_root,
         run_dir=run_dir,
         runtime_mode=runtime_mode,
         facts_path=run_dir / "facts.jsonl",
     )
+
+    facts = tuple(fact for fact in outcome.facts if isinstance(fact, Fact))
+    line_fact = next((fact for fact in facts if fact.key == "read_file_lines"), None)
+    if line_fact is not None:
+        answer = f"README.md has {line_fact.value} lines [fact:read_file_lines]."
+        (run_dir / "final-answer.md").write_text(answer, encoding="utf-8")
+        recorder.append("final_answer", run_id=run_id, answer=answer)
+        coverage_report = verify_answer(
+            answer,
+            list(facts),
+            ["read_file_lines"],
+            session_id=run_id,
+            verification_mode=permission_engine.policy.verification_mode,
+        )
+        write_coverage_report(run_dir / "groundguard-report.json", coverage_report)
+        recorder.append("groundguard_check", run_id=run_id, **coverage_report.to_dict())
 
     recorder.append("run_completed", run_id=run_id, status="completed")
     return RunResult(run_id=run_id, run_dir=run_dir, trace_path=recorder.trace_path)

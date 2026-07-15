@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agenttrust-runtime"
-version = "0.6.0"
+version = "0.7.0"
 description = "Local-first runtime for governed agent tool execution."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,8 +24,10 @@ test = [
   "mypy>=1.10",
   "build>=1.2",
   "jsonschema>=4.0",
+  "cryptography>=42",
 ]
 groundguard = ["groundguard-ai>=0.1"]
+signing = ["cryptography>=42"]
 otel = [
   "opentelemetry-api>=1.24",
   "opentelemetry-sdk>=1.24",

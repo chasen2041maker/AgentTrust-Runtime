@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 from queue import Queue
 import subprocess
@@ -39,6 +40,26 @@ class McpToolDescriptor:
     input_schema: dict[str, object]
 
 
+@dataclass(frozen=True)
+class McpLaunchMetadata:
+    """Non-secret metadata describing the stdio process launch boundary."""
+
+    environment_mode: str
+    configured_environment_keys: tuple[str, ...]
+    inherited_environment_keys: tuple[str, ...]
+    working_directory_source: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "mcp_environment_mode": self.environment_mode,
+            "mcp_configured_env_keys": list(self.configured_environment_keys),
+            "mcp_configured_env_count": len(self.configured_environment_keys),
+            "mcp_inherited_env_keys": list(self.inherited_environment_keys),
+            "mcp_inherited_env_count": len(self.inherited_environment_keys),
+            "mcp_working_directory_source": self.working_directory_source,
+        }
+
+
 class McpStdioClient:
     """Launch one local MCP server only after an outer trust gate permits it."""
 
@@ -47,9 +68,22 @@ class McpStdioClient:
         self._timeout_seconds = timeout_seconds
         self._process: subprocess.Popen[str] | None = None
         self._request_id = 0
+        self._environment, inherited_keys = build_mcp_launch_environment(config.env)
+        self._working_directory = config.config_path.parent.resolve()
+        self._launch_metadata = McpLaunchMetadata(
+            environment_mode="allowlisted",
+            configured_environment_keys=tuple(sorted(config.env)),
+            inherited_environment_keys=inherited_keys,
+            working_directory_source="config_directory",
+        )
+
+    @property
+    def launch_metadata(self) -> McpLaunchMetadata:
+        """Return the non-secret launch policy used for this client process."""
+
+        return self._launch_metadata
 
     def __enter__(self) -> McpStdioClient:
-        environment = {**_base_environment(), **self._config.env}
         try:
             self._process = subprocess.Popen(
                 [self._config.command, *self._config.args],
@@ -60,32 +94,47 @@ class McpStdioClient:
                 encoding="utf-8",
                 bufsize=1,
                 shell=False,
-                env=environment,
+                env=self._environment,
+                cwd=self._working_directory,
+                close_fds=True,
             )
         except OSError as exc:
             raise McpTransportError(f"failed to launch MCP server {self._config.name}: {exc}") from exc
-        self.request(
-            "initialize",
-            {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "agenttrust-runtime", "version": "0.1.0"},
-            },
-        )
-        self.notify("notifications/initialized", {})
+        try:
+            self.request(
+                "initialize",
+                {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "agenttrust-runtime", "version": "0.7.0"},
+                },
+            )
+            self.notify("notifications/initialized", {})
+        except Exception:
+            self.close()
+            raise
         return self
 
     def __exit__(self, exception_type, exception, traceback) -> None:
-        if self._process is None:
-            return
-        if self._process.poll() is None:
-            self._process.terminate()
-            try:
-                self._process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self._process.kill()
-                self._process.wait(timeout=1)
+        self.close()
+
+    def close(self) -> None:
+        """Terminate a launched process after a failed handshake or completed call."""
+
+        process = self._process
         self._process = None
+        if process is None or process.poll() is not None:
+            return
+        try:
+            process.terminate()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1)
+        except OSError:
+            # The process may have exited between poll() and terminate().
+            return
 
     def list_tools(self) -> list[McpToolDescriptor]:
         result = self.request("tools/list", {})
@@ -171,7 +220,47 @@ class McpStdioClient:
         return self._process
 
 
-def _base_environment() -> dict[str, str]:
-    import os
+_MCP_INHERITED_ENVIRONMENT_KEYS = frozenset(
+    {
+        "APPDATA",
+        "COMSPEC",
+        "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LOCALAPPDATA",
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "TEMP",
+        "TERM",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+        "USERPROFILE",
+        "WINDIR",
+    }
+)
 
-    return dict(os.environ)
+
+def build_mcp_launch_environment(
+    configured_environment: Mapping[str, str],
+    parent_environment: Mapping[str, str] | None = None,
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Use only runtime prerequisites plus values explicitly present in MCP config.
+
+    This prevents ambient credentials from the agent host process reaching a
+    local MCP subprocess. Server-specific credentials remain an explicit part
+    of the inspected MCP configuration instead of an implicit inheritance.
+    """
+
+    parent = os.environ if parent_environment is None else parent_environment
+    inherited = {
+        key: value
+        for key, value in parent.items()
+        if key.upper() in _MCP_INHERITED_ENVIRONMENT_KEYS
+    }
+    environment = {**inherited, **dict(configured_environment)}
+    return environment, tuple(sorted(inherited))

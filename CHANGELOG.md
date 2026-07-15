@@ -2,6 +2,21 @@
 
 All notable changes to AgentTrust Runtime are documented here.
 
+## 0.7.0 - 2026-07-15
+
+### Added
+
+- Optional `.[signing]` extra with Ed25519 `agenttrust evidence keygen`, `anchor`, and `verify-anchor` commands.
+- Passphrase-encrypted private-key generation, public-key fingerprints, atomic `trace-anchor.json` writes, and pinned-public-key verification for signed trace heads.
+- `agenttrust policy export`, `inspect-pack`, and `import` for offline `agenttrust.policy-pack/v1` artifacts with normalized policy semantics, canonical digests, schema fixtures, and explicit overwrite behavior.
+
+### Security
+
+- GroundGuard verification now receives the active AgentTrust `run_id` as its FactGate session ID, and persisted reports retain that binding. The minimal live adapter now also records its final-answer fact check when its governed read succeeds.
+- Evidence anchors sign the verified run ID, event count, head hash, signing time, and key ID. A later append or a fully rewritten-but-hash-valid chain is rejected until an authorized signer creates a fresh anchor.
+- Documentation now distinguishes a locally stored signature artifact from trusted timestamps, external witnesses, immutable storage, and non-repudiation.
+- Real MCP stdio processes now use an OS-runtime environment allowlist plus explicit config values, a config-directory working directory, closed inherited descriptors, and handshake-failure cleanup. Evidence and OTel record non-secret launch policy metadata.
+
 ## 0.6.0 - 2026-07-13
 
 ### Added

@@ -58,6 +58,9 @@ jobs:
           - extra: otel
             import_module: opentelemetry.sdk
             tests: tests/test_otel_export.py
+          - extra: signing
+            import_module: cryptography
+            tests: tests/test_evidence_signing.py
           - extra: openai
             import_module: agents
             tests: tests/test_integrations.py

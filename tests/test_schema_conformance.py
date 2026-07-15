@@ -9,6 +9,7 @@ import zipfile
 
 from jsonschema import Draft202012Validator
 
+from agenttrust.adapters.policy.pack import load_policy_pack
 from agenttrust.domain.models import ToolIntent
 from agenttrust.domain.protocol import DecisionRequest
 from agenttrust.tools.registry import get_tool_spec
@@ -25,6 +26,7 @@ def test_standalone_conformance_fixtures_validate_against_json_schemas() -> None
         "policy-v1.json": "policy-v1.schema.json",
         "evidence-v1.json": "evidence-v1.schema.json",
         "tool-spec-v1.json": "tool-spec-v1.schema.json",
+        "policy-pack-v1.json": "policy-pack-v1.schema.json",
     }
 
     for fixture_name, schema_name in pairs.items():
@@ -42,6 +44,14 @@ def test_runtime_protocol_objects_match_their_conformance_contracts() -> None:
     assert get_tool_spec("read_file").to_dict()["schema_version"] == "agenttrust.tool-spec/v1"
 
 
+def test_policy_pack_conformance_fixture_loads_into_runtime_policy() -> None:
+    pack = load_policy_pack(FIXTURES / "policy-pack-v1.json")
+
+    assert pack.name == "baseline-controls"
+    assert pack.version == "1.0.0"
+    assert pack.policy.to_dict()["policy_version"] == "agenttrust.policy/v1"
+
+
 def test_built_distributions_include_every_protocol_schema(tmp_path: Path) -> None:
     dist_dir = tmp_path / "dist"
     subprocess.run(
@@ -51,7 +61,16 @@ def test_built_distributions_include_every_protocol_schema(tmp_path: Path) -> No
         capture_output=True,
         text=True,
     )
-    expected = {f"{name}" for name in ("decision-v1.schema.json", "policy-v1.schema.json", "evidence-v1.schema.json", "tool-spec-v1.schema.json")}
+    expected = {
+        f"{name}"
+        for name in (
+            "decision-v1.schema.json",
+            "policy-v1.schema.json",
+            "policy-pack-v1.schema.json",
+            "evidence-v1.schema.json",
+            "tool-spec-v1.schema.json",
+        )
+    }
     wheel_path = next(dist_dir.glob("*.whl"))
     sdist_path = next(dist_dir.glob("*.tar.gz"))
 

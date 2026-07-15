@@ -1,6 +1,6 @@
 # 重构路线图
 
-本路线图记录架构演进的完成状态，而不是未来愿望清单。`v0.6.0` 完成了策略协议、异步运行时、多待审审批与 evidence/SQLite 性能收敛；当前发布仍是 Beta/开发者预览。
+本路线图记录架构演进的完成状态，而不是未来愿望清单。`v0.7.0` 在策略协议、异步运行时、多待审审批与 evidence/SQLite 性能收敛之上，补齐了可选的签名 evidence anchor；当前发布仍是 Beta/开发者预览。
 
 ## 已完成
 
@@ -56,6 +56,14 @@
 - 一个 session 可保持多个待审调用；审批后可通过 `tool_call_id` 独立恢复。
 - 新 evidence 使用 v1 envelope；`trace-head.json` 避免 append 的重复全量扫描，旧 trace 在已验证读取中兼容迁移。
 - SQLite 对普通路径增量投影，恢复、取消和审批只重建目标 run；全局 rebuild 保留为显式维护命令。
+
+### v0.7.0 Signed Evidence Anchors
+
+- 可选 `.[signing]` extra 使用 Ed25519 生成受口令保护的私钥，并为已验证 trace head 写入 `trace-anchor.json`。
+- anchor 绑定 run ID、事件数、head hash、签名时间与公钥指纹；`verify-anchor --public-key` 支持通过独立固定的公钥确认签名者。
+- 签名 anchor 不是可信时间戳、外部见证或不可变存储；这些仍是未来独立的可靠性边界。
+- 真实 MCP stdio 启动使用环境白名单、显式 config `env`、config 目录工作路径和关闭继承句柄；它降低宿主凭据泄漏面，但不是 OS 级进程或网络隔离。
+- 新增 `agenttrust.policy-pack/v1`：归一化 policy 的离线 export/import、canonical digest、schema fixture 与显式覆盖边界。它是互操作和审查工件，不是远程 marketplace 或作者签名系统。
 
 ## 保持的架构规则
 

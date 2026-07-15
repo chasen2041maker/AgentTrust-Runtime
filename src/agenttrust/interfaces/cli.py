@@ -23,6 +23,7 @@ from agenttrust.mcp_lite import (
 )
 from agenttrust.memory_lite import add_memory, clear_memory, list_memory
 from agenttrust.adapters.policy.yaml_policy import DEFAULT_POLICY_TEXT, load_policy
+from agenttrust.adapters.policy.pack import export_policy_pack, import_policy_pack, load_policy_pack
 from agenttrust.runtime.fixtures import list_fixtures, run_fixture
 from agenttrust.runtime.live import run_live
 from agenttrust.runtime.recovery import restore_run
@@ -30,6 +31,7 @@ from agenttrust.runtime.report import resolve_run_dir, timeline_lines, write_htm
 from agenttrust.runtime.trace import verify_trace
 from agenttrust.adapters.evidence.export import export_ndjson
 from agenttrust.adapters.evidence.otel import export_otel_trace
+from agenttrust.adapters.evidence.signing import generate_signing_key_pair, sign_verified_trace, verify_trace_anchor
 from agenttrust.adapters.evidence.run_lock import RunLock
 from agenttrust.interfaces.python_api import AgentTrustRuntime
 from agenttrust.adapters.evidence.approval_journal import JsonlApprovalJournal
@@ -110,6 +112,20 @@ def build_parser() -> argparse.ArgumentParser:
     evidence_otel = evidence_subparsers.add_parser("export-otel", help="Export run evidence to an OTLP HTTP endpoint.")
     evidence_otel.add_argument("run_id")
     evidence_otel.add_argument("--endpoint", required=True)
+    evidence_keygen = evidence_subparsers.add_parser("keygen", help="Create a passphrase-encrypted Ed25519 evidence signing key pair.")
+    evidence_keygen.add_argument("--private-key", required=True)
+    evidence_keygen.add_argument("--public-key", required=True)
+    evidence_keygen.add_argument("--passphrase-env", required=True, help="Environment variable containing the key passphrase.")
+    evidence_anchor = evidence_subparsers.add_parser("anchor", help="Sign the verified current trace head with an Ed25519 key.")
+    evidence_anchor.add_argument("run_id")
+    evidence_anchor.add_argument("--private-key", required=True)
+    evidence_anchor.add_argument("--passphrase-env", required=True, help="Environment variable containing the key passphrase.")
+    evidence_verify_anchor = evidence_subparsers.add_parser("verify-anchor", help="Verify a signed evidence anchor and its trace head.")
+    evidence_verify_anchor.add_argument("run_id")
+    evidence_verify_anchor.add_argument(
+        "--public-key",
+        help="Trusted Ed25519 public key PEM. Defaults to the public key included in the anchor.",
+    )
 
     state_parser = subparsers.add_parser("state", help="Derived SQLite state helpers.")
     state_subparsers = state_parser.add_subparsers(dest="state_command", required=True)
@@ -144,6 +160,18 @@ def build_parser() -> argparse.ArgumentParser:
     explain_parser.add_argument("--server")
     explain_parser.add_argument("--remote-tool")
     explain_parser.add_argument("--runtime-mode", default="interactive")
+    policy_export = policy_subparsers.add_parser("export", help="Export a normalized, digest-bound policy pack.")
+    policy_export.add_argument("path")
+    policy_export.add_argument("--name", required=True)
+    policy_export.add_argument("--version", required=True)
+    policy_export.add_argument("--output", required=True)
+    policy_export.add_argument("--force", action="store_true", help="Replace an existing policy-pack artifact.")
+    policy_import = policy_subparsers.add_parser("import", help="Validate and import a policy pack as YAML.")
+    policy_import.add_argument("pack")
+    policy_import.add_argument("--output", required=True)
+    policy_import.add_argument("--force", action="store_true", help="Replace an existing YAML policy file.")
+    policy_inspect_pack = policy_subparsers.add_parser("inspect-pack", help="Validate and print a policy pack.")
+    policy_inspect_pack.add_argument("pack")
 
     tools_parser = subparsers.add_parser("tools", help="Tool registry helpers.")
     tools_subparsers = tools_parser.add_subparsers(dest="tools_command", required=True)
@@ -330,6 +358,42 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(verification_result, ensure_ascii=False, indent=2))
         return 0 if verification_result["valid"] else 2
 
+    if args.command == "evidence" and args.evidence_command == "keygen":
+        try:
+            key_pair = generate_signing_key_pair(
+                _project_path(project_root, args.private_key),
+                _project_path(project_root, args.public_key),
+                passphrase=_passphrase_from_env(args.passphrase_env),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"evidence key generation failed: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(key_pair, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "evidence" and args.evidence_command == "anchor":
+        try:
+            anchor_path = sign_verified_trace(
+                resolve_run_dir(project_root, args.run_id),
+                _project_path(project_root, args.private_key),
+                passphrase=_passphrase_from_env(args.passphrase_env),
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"evidence anchoring failed: {exc}", file=sys.stderr)
+            return 2
+        print(anchor_path)
+        return 0
+
+    if args.command == "evidence" and args.evidence_command == "verify-anchor":
+        try:
+            public_key_path = _project_path(project_root, args.public_key) if args.public_key else None
+            verification_result = verify_trace_anchor(resolve_run_dir(project_root, args.run_id), public_key_path)
+        except RuntimeError as exc:
+            print(f"evidence anchor verification failed: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(verification_result, ensure_ascii=False, indent=2))
+        return 0 if verification_result["valid"] else 2
+
     if args.command == "evidence" and args.evidence_command == "export":
         try:
             print(export_ndjson(resolve_run_dir(project_root, args.run_id)))
@@ -403,6 +467,43 @@ def main(argv: list[str] | None = None) -> int:
                 print(str(exc), file=sys.stderr)
             return 2
         print(f"valid policy file: {policy_path}")
+        return 0
+
+    if args.command == "policy" and args.policy_command == "export":
+        try:
+            pack = export_policy_pack(
+                _project_path(project_root, args.path),
+                _project_path(project_root, args.output),
+                name=args.name,
+                version=args.version,
+                overwrite=args.force,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"policy export failed: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(pack.to_dict(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "policy" and args.policy_command == "inspect-pack":
+        try:
+            pack = load_policy_pack(_project_path(project_root, args.pack))
+        except (OSError, ValueError) as exc:
+            print(f"policy inspect-pack failed: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(pack.to_dict(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "policy" and args.policy_command == "import":
+        try:
+            pack = import_policy_pack(
+                _project_path(project_root, args.pack),
+                _project_path(project_root, args.output),
+                overwrite=args.force,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"policy import failed: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps({"output": str(_project_path(project_root, args.output)), **pack.to_dict()}, ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "policy" and args.policy_command in {"lint", "test", "explain"}:
@@ -685,6 +786,17 @@ def _approval_from_verified_evidence(project_root: Path, approval_id: str) -> Ap
         return None
     replayed = replay_verified_run(candidates[0])
     return next((item for item in replayed.approvals if item.approval_id == approval_id), None)
+
+
+def _project_path(project_root: Path, value: str) -> Path:
+    return (project_root / value).resolve()
+
+
+def _passphrase_from_env(variable_name: str) -> str:
+    passphrase = os.environ.get(variable_name)
+    if not passphrase:
+        raise ValueError(f"environment variable '{variable_name}' is missing or empty")
+    return passphrase
 
 
 if __name__ == "__main__":

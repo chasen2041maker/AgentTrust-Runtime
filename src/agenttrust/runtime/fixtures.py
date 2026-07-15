@@ -422,6 +422,7 @@ def run_fixture(
             fixture.final_answer,
             all_facts,
             list(fixture.required_fact_keys),
+            session_id=run_id,
             allow_simulated_facts=runtime_mode == "test",
             verification_mode=policy.verification_mode,
         )

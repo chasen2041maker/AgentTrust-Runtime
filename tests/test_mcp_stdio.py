@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from agenttrust.adapters.mcp.runtime import list_server_tools
+from agenttrust.adapters.mcp.stdio import McpStdioClient, McpTransportError, build_mcp_launch_environment
 from agenttrust.adapters.tools.gateway import ToolGateway
 from agenttrust import AgentTrustRuntime
 from agenttrust.cli import main
@@ -59,6 +60,70 @@ def test_real_mcp_stdio_call_requires_trusted_surface_and_returns_structured_res
     assert result.metadata["mcp_transport"] == "stdio"
     assert result.metadata["mcp_tool_name"] == "echo"
     assert result.metadata["mcp_tool_schema_hash"].startswith("sha256:")
+    assert result.metadata["mcp_environment_mode"] == "allowlisted"
+    assert result.metadata["mcp_configured_env_keys"] == ["MCP_DRIFT"]
+    assert result.metadata["mcp_configured_env_count"] == 1
+    assert result.metadata["mcp_working_directory_source"] == "config_directory"
+
+
+def test_mcp_launch_environment_drops_ambient_credentials_and_keeps_explicit_config() -> None:
+    environment, inherited_keys = build_mcp_launch_environment(
+        {"MCP_TOKEN": "declared-token"},
+        {
+            "PATH": "C:/runtime/bin",
+            "SystemRoot": "C:/Windows",
+            "OPENAI_API_KEY": "ambient-secret",
+            "AWS_SECRET_ACCESS_KEY": "ambient-secret",
+        },
+    )
+
+    assert environment["PATH"] == "C:/runtime/bin"
+    assert environment["SystemRoot"] == "C:/Windows"
+    assert environment["MCP_TOKEN"] == "declared-token"
+    assert "OPENAI_API_KEY" not in environment
+    assert "AWS_SECRET_ACCESS_KEY" not in environment
+    assert inherited_keys == ("PATH", "SystemRoot")
+
+
+def test_mcp_process_uses_sanitized_environment_and_config_directory(tmp_path: Path, monkeypatch) -> None:
+    _write_server_config(tmp_path)
+    monkeypatch.setenv("AGENTTRUST_PARENT_SECRET", "must-not-reach-mcp")
+    config = load_mcp_servers(tmp_path / ".mcp.json")["fake"]
+
+    with McpStdioClient(config) as client:
+        response = client.call_tool("probe_launch_boundary", {})
+
+    content = response["content"]
+    assert isinstance(content, list)
+    probe = json.loads(content[0]["text"])
+    assert probe == {
+        "configured_mcp_drift": "0",
+        "host_secret": None,
+        "working_directory": str(tmp_path),
+    }
+    assert client.launch_metadata.to_dict()["mcp_environment_mode"] == "allowlisted"
+
+
+def test_failed_mcp_handshake_cleans_up_its_child_process(tmp_path: Path) -> None:
+    _write_server_config(tmp_path)
+    config = load_mcp_servers(tmp_path / ".mcp.json")["fake"]
+    config = type(config)(
+        name=config.name,
+        command=config.command,
+        args=config.args,
+        env={**config.env, "MCP_SUPPRESS_INITIALIZE": "1"},
+        config_path=config.config_path,
+    )
+    client = McpStdioClient(config, timeout_seconds=0.01)
+
+    try:
+        client.__enter__()
+    except McpTransportError:
+        pass
+    else:
+        raise AssertionError("fake MCP handshake should time out")
+
+    assert client._process is None
 
 
 def test_mcp_without_configuration_returns_an_error_outside_test_mode(tmp_path: Path) -> None:

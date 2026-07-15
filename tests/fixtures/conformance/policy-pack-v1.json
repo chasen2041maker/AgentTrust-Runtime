@@ -1,0 +1,16 @@
+{
+  "schema_version": "agenttrust.policy-pack/v1",
+  "pack": {"name": "baseline-controls", "version": "1.0.0"},
+  "policy": {
+    "policy_version": "agenttrust.policy/v1",
+    "project_root": ".",
+    "mode": "default",
+    "final_answer": {"on_incomplete": "warn"},
+    "verification": {"mode": "fallback"},
+    "approvals": {"default_ttl_seconds": 3600},
+    "rules": [
+      {"id": "ask-write", "tool": "write_file", "effect": "ask", "reason": "review source writes", "paths": ["src/**"]}
+    ]
+  },
+  "policy_digest": "sha256:9e041a57313ba2560bfafb85b27227d0637f477d60d4c12381e04072c7ab6389"
+}

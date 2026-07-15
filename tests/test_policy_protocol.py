@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from agenttrust.adapters.policy.yaml_policy import load_policy
 from agenttrust.domain.models import ToolIntent
-from agenttrust.domain.policy import Policy, PolicyRule
+from agenttrust.domain.policy import HookRule, Policy, PolicyRule
 from agenttrust.domain.protocol import DecisionRequest, POLICY_PROTOCOL_VERSION
 from agenttrust.interfaces.cli import main
 from agenttrust.permissions.diagnostics import lint_policy
@@ -81,3 +83,25 @@ def test_policy_loader_records_protocol_version(tmp_path: Path) -> None:
     policy_path.write_text("policy_version: agenttrust.policy/v1\nrules: []\n", encoding="utf-8")
 
     assert load_policy(policy_path).protocol_version == POLICY_PROTOCOL_VERSION
+
+
+def test_policy_rejects_hook_actions_that_could_relax_a_control() -> None:
+    with pytest.raises(ValueError, match="pre-tool hooks may only deny"):
+        Policy.from_dict(
+            {
+                "rules": [],
+                "hooks": {
+                    "pre_tool": [
+                        {
+                            "id": "unsafe-allow",
+                            "when": {"tool": "write_file"},
+                            "action": "allow",
+                            "reason": "must not relax policy",
+                        }
+                    ]
+                },
+            }
+        )
+
+    with pytest.raises(ValueError, match="pre-tool hooks may only deny"):
+        HookRule(id="unsafe-allow", tool="write_file", action="allow", reason="must not relax policy")

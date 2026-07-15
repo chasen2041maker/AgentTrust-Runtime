@@ -176,6 +176,10 @@ def _event_attributes(event: Mapping[str, object]) -> dict[str, object]:
         "mcp_transport",
         "mcp_execution_mode",
         "mcp_simulation_explicit",
+        "mcp_environment_mode",
+        "mcp_configured_env_count",
+        "mcp_inherited_env_count",
+        "mcp_working_directory_source",
     ):
         value = event.get(key, metadata_values.get(key))
         if isinstance(value, (str, bool, int, float)):

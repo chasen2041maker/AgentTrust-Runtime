@@ -211,6 +211,7 @@ class AgentTrustSession:
             answer,
             facts,
             list(required_fact_keys),
+            session_id=self.run_id,
             allow_simulated_facts=self._runtime_mode == "test",
             verification_mode=self._verification_mode,
         )

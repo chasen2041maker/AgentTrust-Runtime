@@ -6,7 +6,7 @@ import pytest
 
 from agenttrust import AgentTrustRuntime
 from agenttrust.adapters.evidence.jsonl_store import read_trace
-from agenttrust.adapters.evidence.otel import _timestamp_ns, export_otel_trace
+from agenttrust.adapters.evidence.otel import _event_attributes, _timestamp_ns, export_otel_trace
 
 
 def test_otel_export_reconstructs_session_tool_and_final_answer_hierarchy(tmp_path) -> None:
@@ -56,3 +56,27 @@ def test_otel_export_rejects_invalid_evidence_before_exporting(tmp_path) -> None
 
     with pytest.raises(ValueError, match="invalid evidence trace"):
         export_otel_trace(session.run_dir, span_exporter=object())
+
+
+def test_otel_export_includes_non_secret_mcp_launch_boundary_metadata() -> None:
+    attributes = _event_attributes(
+        {
+            "event_type": "tool_result",
+            "run_id": "run_mcp",
+            "tool_call_id": "call_mcp",
+            "tool_name": "mcp_tool",
+            "metadata": {
+                "mcp_environment_mode": "allowlisted",
+                "mcp_configured_env_count": 2,
+                "mcp_inherited_env_count": 4,
+                "mcp_working_directory_source": "config_directory",
+                "mcp_configured_env_keys": ["MCP_TOKEN", "SERVICE_URL"],
+            },
+        }
+    )
+
+    assert attributes["agenttrust.mcp_environment_mode"] == "allowlisted"
+    assert attributes["agenttrust.mcp_configured_env_count"] == 2
+    assert attributes["agenttrust.mcp_inherited_env_count"] == 4
+    assert attributes["agenttrust.mcp_working_directory_source"] == "config_directory"
+    assert "agenttrust.mcp_configured_env_keys" not in attributes

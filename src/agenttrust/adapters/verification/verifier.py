@@ -22,6 +22,7 @@ class CoverageReport:
     status: str
     required_fact_keys: tuple[str, ...]
     engine: str = "agenttrust-fallback"
+    session_id: str | None = None
     verified_keys: tuple[str, ...] = ()
     contradicted_keys: tuple[str, ...] = ()
     unverified_keys: tuple[str, ...] = ()
@@ -31,6 +32,7 @@ class CoverageReport:
         return {
             "status": self.status,
             "engine": self.engine,
+            "session_id": self.session_id,
             "required_fact_keys": list(self.required_fact_keys),
             "verified_keys": list(self.verified_keys),
             "contradicted_keys": list(self.contradicted_keys),
@@ -44,19 +46,21 @@ def verify_answer(
     facts: list[Fact],
     required_fact_keys: list[str],
     *,
+    session_id: str = "agenttrust",
     allow_simulated_facts: bool = False,
     verification_mode: str = "fallback",
 ) -> CoverageReport:
     if verification_mode not in {"fallback", "groundguard_required"}:
         raise ValueError(f"invalid verification mode: {verification_mode}")
     eligible_facts = facts if allow_simulated_facts else [fact for fact in facts if fact.trust_level == "trusted"]
-    groundguard_report = _try_groundguard(answer, eligible_facts, required_fact_keys)
+    groundguard_report = _try_groundguard(answer, eligible_facts, required_fact_keys, session_id=session_id)
     if groundguard_report is not None:
         return groundguard_report
     if verification_mode == "groundguard_required":
         return CoverageReport(
             status="unverified",
             engine="groundguard-required",
+            session_id=session_id,
             required_fact_keys=tuple(required_fact_keys),
             unverified_keys=tuple(required_fact_keys),
             details=tuple(
@@ -68,14 +72,20 @@ def verify_answer(
                 for key in required_fact_keys
             ),
         )
-    return _fallback_verify_answer(answer, eligible_facts, required_fact_keys)
+    return _fallback_verify_answer(answer, eligible_facts, required_fact_keys, session_id=session_id)
 
 
-def _try_groundguard(answer: str, facts: list[Fact], required_fact_keys: list[str]) -> CoverageReport | None:
+def _try_groundguard(
+    answer: str,
+    facts: list[Fact],
+    required_fact_keys: list[str],
+    *,
+    session_id: str,
+) -> CoverageReport | None:
     if FactGate is None or report_to_versioned_dict is None:
         return None
     try:
-        gate = FactGate(session_id="agenttrust")
+        gate = FactGate(session_id=session_id)
         for fact in facts:
             gate.record_fact(
                 key=fact.key,
@@ -141,6 +151,7 @@ def _try_groundguard(answer: str, facts: list[Fact], required_fact_keys: list[st
     return CoverageReport(
         status=status,
         engine="groundguard",
+        session_id=str(payload.get("session_id", session_id)),
         required_fact_keys=tuple(required_fact_keys),
         verified_keys=tuple(verified),
         contradicted_keys=tuple(contradicted),
@@ -157,7 +168,13 @@ def _normalize_groundguard_status(status: str) -> str:
     return "unverified"
 
 
-def _fallback_verify_answer(answer: str, facts: list[Fact], required_fact_keys: list[str]) -> CoverageReport:
+def _fallback_verify_answer(
+    answer: str,
+    facts: list[Fact],
+    required_fact_keys: list[str],
+    *,
+    session_id: str,
+) -> CoverageReport:
     facts_by_key = {fact.key: fact for fact in facts}
     verified: list[str] = []
     contradicted: list[str] = []
@@ -203,6 +220,7 @@ def _fallback_verify_answer(answer: str, facts: list[Fact], required_fact_keys: 
     return CoverageReport(
         status=status,
         engine="agenttrust-fallback",
+        session_id=session_id,
         required_fact_keys=tuple(required_fact_keys),
         verified_keys=tuple(verified),
         contradicted_keys=tuple(contradicted),
